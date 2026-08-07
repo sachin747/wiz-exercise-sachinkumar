@@ -3,22 +3,28 @@
 # backup bucket. NAT is an implementation detail for private-subnet egress,
 # not a stated requirement, and it's a flat ~$33/month regardless of traffic.
 #
-# What actually needs outbound access, checked against this repo rather than
-# assumed: pulling the app image from our own ECR repo, pulling
-# vpc-cni/coredns/kube-proxy from AWS's regional ECR (not Docker Hub, not the
-# public gallery), and STS - every node's kubelet authenticates to the
-# cluster with a short-lived IAM token (aws-iam-authenticator, under the
-# hood an STS GetCallerIdentity call), so nodes never actually register as
-# Kubernetes nodes without a path to STS, even though the EC2 instances
-# themselves boot and pass health checks fine. EKS API itself is already
-# reachable privately, IMDSv2 never touches the network, and the app only
-# talks to Mongo inside this VPC.
+# What actually needs outbound access - this list came from AWS's own
+# private-cluster requirements (docs.aws.amazon.com/eks/latest/userguide/
+# private-clusters.html), not assumption; a shorter list looked plausible
+# first but nodes silently never joined the cluster:
+#   - ecr.api / ecr.dkr: pulling the app image from our own ECR repo, and
+#     vpc-cni/coredns/kube-proxy from AWS's regional ECR
+#   - eks: nodes call the EKS control-plane API to self-configure (fetch
+#     endpoint/CA) during boot - distinct from the Kubernetes API server
+#     itself, which endpoint_private_access on the cluster already covers
+#   - ec2: the EKS-optimized AMI uses EC2 APIs to set the node's DNS name
+#   - sts: IRSA pods (alb-controller.tf) exchange tokens via STS - nodes
+#     don't need this to join, but the ALB controller pod does
+#   - elasticloadbalancing: aws-load-balancer-controller manages ALBs/NLBs
+#     through this API
+# IMDSv2 never touches the network, and the app only talks to Mongo inside
+# this VPC.
 #
 # Skipped SSM Session Manager into the nodes: not required (the exercise
 # asks for kubectl, not node shell access) and the ssm/ssmmessages/ec2messages
 # endpoints would've added ~$44/month for nothing this demonstrates.
 #
-# End result: ECR (api + dkr) + STS, plus the free S3 gateway endpoint -
+# End result: five interface endpoints plus the free S3 gateway endpoint -
 # still cheaper than the NAT gateway it replaces, and private subnets still have no
 # path to the public internet at all.
 
@@ -60,9 +66,12 @@ resource "aws_vpc_endpoint" "s3" {
 
 locals {
   interface_endpoints = toset([
-    "ecr.api", # authenticate + resolve image manifests
-    "ecr.dkr", # pull image layers
-    "sts",     # kubelet's IAM auth token exchange - nodes can't join without this
+    "ecr.api",              # authenticate + resolve image manifests
+    "ecr.dkr",              # pull image layers
+    "sts",                  # IRSA pods (alb-controller.tf) exchange tokens via STS
+    "eks",                  # nodes call the EKS control-plane API to self-configure at boot
+    "ec2",                  # EKS-optimized AMI uses EC2 APIs to set the node DNS name
+    "elasticloadbalancing", # aws-load-balancer-controller manages ALBs/NLBs via this API
   ])
 }
 
