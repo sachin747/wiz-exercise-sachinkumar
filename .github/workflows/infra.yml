@@ -85,11 +85,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Gate 2: plan, runs on every PR so reviewers see the diff.
+  # Gate 2: plan, runs on every PR so reviewers see the diff. Deliberately
+  # excludes push-to-main: apply also runs there, and since these are two
+  # independent jobs (neither needs the other), both would start at once
+  # and race for the same S3 state lock - whichever loses fails instantly
+  # with "Error acquiring the state lock". Push to main only needs apply.
   plan:
     name: Plan
     needs: scan
-    if: github.event_name != 'workflow_dispatch' || inputs.action == 'plan'
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.action == 'plan')
     runs-on: ubuntu-latest
     environment: aws
     steps:

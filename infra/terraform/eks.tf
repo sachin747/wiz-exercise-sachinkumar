@@ -61,6 +61,13 @@ resource "aws_eks_cluster" "main" {
   # streams go to CloudWatch and feed GuardDuty's EKS Audit Log Monitoring.
   enabled_cluster_log_types = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
 
+  # False because the three core add-ons (coredns, kube-proxy, vpc-cni) are
+  # each managed explicitly below via aws_eks_addon - self-managed bootstrap
+  # would double up on them. Pinned explicitly: this attribute forces a full
+  # cluster replacement on change, and the provider's own default (true)
+  # doesn't match what's actually on the cluster if left unset.
+  bootstrap_self_managed_addons = false
+
   access_config {
     authentication_mode                         = "API"
     bootstrap_cluster_creator_admin_permissions = true
