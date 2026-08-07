@@ -27,6 +27,9 @@ permissions:
   id-token: write
   pull-requests: write
   security-events: write
+  # Required only because this repo is private - upload-sarif needs it to
+  # look up the current run when associating SARIF results with it.
+  actions: read
 
 concurrency:
   group: infrastructure
