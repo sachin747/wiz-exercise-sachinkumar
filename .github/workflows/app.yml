@@ -244,9 +244,9 @@ jobs:
           ALB_CONTROLLER_MANIFEST=$(sed \
             -e "s|public\.ecr\.aws/eks/aws-load-balancer-controller:|${ALB_CONTROLLER_ECR_URL}:|" \
             -e "/- --ingress-class=alb/a\\
-        - --aws-vpc-id=${VPC_ID}" \
+                  - --aws-vpc-id=${VPC_ID}" \
             -e "/- --ingress-class=alb/a\\
-        - --aws-region=${AWS_REGION}" \
+                  - --aws-region=${AWS_REGION}" \
             k8s/alb-controller.yaml)
 
           # This manifest applies CRDs (ingressclassparams.elbv2.k8s.aws etc.)
