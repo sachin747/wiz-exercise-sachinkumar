@@ -74,31 +74,50 @@ jobs:
 
       # Resource names are deterministic (set in infra/terraform), so the
       # pipeline can discover everything it needs from the AWS APIs.
+      # Each AWS call is assigned to a plain variable first, then echoed -
+      # not `echo "x=$(cmd)"` directly. Inside that form, if cmd fails,
+      # echo itself still succeeds (exit 0), so `set -e` never notices and
+      # the step silently continues with an empty value instead of
+      # stopping - exactly what happened here once already (an empty
+      # alb_controller_ecr_url produced a broken ":v2.13.0" image
+      # reference downstream instead of a clear failure).
       - name: Discover infrastructure
         id: infra
         run: |
           set -euo pipefail
+
+          ECR_URL=$(aws ecr describe-repositories \
+            --repository-names "$PROJECT_NAME" \
+            --query 'repositories[0].repositoryUri' --output text)
+
+          MONGO_IP=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=$PROJECT_NAME-mongodb" \
+                      "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+
+          ALB_ROLE_ARN=$(aws iam get-role \
+            --role-name "$PROJECT_NAME-alb-controller" \
+            --query 'Role.Arn' --output text)
+
+          # Mirror of public.ecr.aws/eks/aws-load-balancer-controller - see
+          # infra/terraform/ecr.tf and infra.yml's "Mirror ALB controller
+          # image" step. Nodes here have no route to ECR Public at all.
+          ALB_CONTROLLER_ECR_URL=$(aws ecr describe-repositories \
+            --repository-names "$PROJECT_NAME-alb-controller" \
+            --query 'repositories[0].repositoryUri' --output text)
+
+          for name in ECR_URL MONGO_IP ALB_ROLE_ARN ALB_CONTROLLER_ECR_URL; do
+            if [ -z "${!name}" ] || [ "${!name}" = "None" ]; then
+              echo "::error::$name resolved empty - infra.yml probably hasn't applied yet" >&2
+              exit 1
+            fi
+          done
+
           {
-            echo "ecr_url=$(aws ecr describe-repositories \
-              --repository-names "$PROJECT_NAME" \
-              --query 'repositories[0].repositoryUri' --output text)"
-
-            echo "mongo_ip=$(aws ec2 describe-instances \
-              --filters "Name=tag:Name,Values=$PROJECT_NAME-mongodb" \
-                        "Name=instance-state-name,Values=running" \
-              --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)"
-
-            echo "alb_role_arn=$(aws iam get-role \
-              --role-name "$PROJECT_NAME-alb-controller" \
-              --query 'Role.Arn' --output text)"
-
-            # Mirror of public.ecr.aws/eks/aws-load-balancer-controller - see
-            # infra/terraform/ecr.tf and infra.yml's "Mirror ALB controller
-            # image" step. Nodes here have no route to ECR Public at all.
-            echo "alb_controller_ecr_url=$(aws ecr describe-repositories \
-              --repository-names "$PROJECT_NAME-alb-controller" \
-              --query 'repositories[0].repositoryUri' --output text)"
-
+            echo "ecr_url=$ECR_URL"
+            echo "mongo_ip=$MONGO_IP"
+            echo "alb_role_arn=$ALB_ROLE_ARN"
+            echo "alb_controller_ecr_url=$ALB_CONTROLLER_ECR_URL"
             echo "image_tag=${GITHUB_SHA::12}"
           } >>"$GITHUB_OUTPUT"
 
