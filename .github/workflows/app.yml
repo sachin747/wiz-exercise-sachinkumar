@@ -186,7 +186,19 @@ jobs:
           kubectl apply -f k8s/alb-controller-serviceaccount.yaml
           kubectl annotate serviceaccount aws-load-balancer-controller -n kube-system \
             eks.amazonaws.com/role-arn="$ALB_ROLE_ARN" --overwrite
-          kubectl apply -f k8s/alb-controller.yaml
+
+          # This file applies CRDs (ingressclassparams.elbv2.k8s.aws etc.) and
+          # an instance of that same kind (the default IngressClassParams) in
+          # one shot. The API server needs a moment to register a brand-new
+          # CRD's REST endpoint before it'll accept instances of it, so the
+          # first apply can fail on just that one resource - a known race
+          # with raw kubectl (Helm handles CRD-then-resource ordering
+          # internally; plain apply doesn't). Idempotent, so re-running it
+          # right after picks up whatever the first pass missed.
+          kubectl apply -f k8s/alb-controller.yaml || {
+            sleep 5
+            kubectl apply -f k8s/alb-controller.yaml
+          }
           kubectl rollout status deployment/aws-load-balancer-controller -n kube-system --timeout=3m
 
           kubectl apply -f k8s/namespace.yaml
