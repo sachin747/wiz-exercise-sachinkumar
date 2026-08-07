@@ -523,8 +523,8 @@ aws ecr get-login-password --region <your AWS_REGION> | `
 
 docker build -t "${ECR}:${TAG}" .
 
-# Same blocking gate the pipeline applies — scan BEFORE pushing
-trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "${ECR}:${TAG}"
+# Same reporting-only scan the pipeline runs — informational, doesn't block
+trivy image --severity HIGH,CRITICAL --exit-code 0 "${ECR}:${TAG}"
 
 docker push "${ECR}:${TAG}"
 

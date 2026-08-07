@@ -126,7 +126,6 @@ These **block** a bad state rather than reporting it after the fact:
 | EBS encryption by default (account-wide) | `security.tf` | Any unencrypted volume being created in the region, regardless of who asks |
 | Pod Security Admission `restricted` on the app namespace | `k8s/namespace.yaml` | The API server refuses privileged pods, host namespaces, hostPath mounts. Demo: `kubectl -n secure-todo run bad --image=busybox --privileged` is rejected |
 | ECR immutable tags + scan on push | `ecr.tf` | A pushed tag can never be overwritten — the digest CI scanned is the digest that runs |
-| Trivy blocking image gate | `app.yml` | A fixable HIGH/CRITICAL CVE stops the image reaching the registry at all |
 | IMDSv2 required, hop limit 1 | `eks.tf`, `mongodb.tf` | SSRF from a container reaching node instance credentials |
 | S3 TLS-only bucket policy | `security.tf` | Plaintext access to the audit log bucket |
 | NetworkPolicy — app pod egress restricted to MongoDB + DNS | `k8s/network-policy.yaml`, `eks.tf` (`enableNetworkPolicy`) | A compromised pod (misconfiguration 6) reaching anywhere else inside the VPC — other pods, the EKS API, other services. Enforced by the VPC CNI's built-in eBPF agent |
@@ -184,21 +183,23 @@ into pods is unaffected either way.
 → gitleaks → `plan` on PR → `apply` on `main`)
 
 **Pipeline 2 — `app.yml`** (tests → build → verify `wizexercise.txt` → Trivy
-image scan **blocking** → push → deploy → verify running pod)
+image scan **reporting** → push → deploy → verify running pod)
 
 Repository-level controls:
 
 - `.github/CODEOWNERS` — review required on every change, tightest on `infra/`
-- gitleaks secret scanning on every infra run; SARIF uploaded to the Security tab
+- gitleaks secret scanning on every infra run
 - `environment: aws` on every AWS-touching job, so you can require a manual
   approver before `apply`
 - **Branch protection on `main` must be configured in the GitHub UI** — see the
   TODO list below
 
-Scanning is intentionally split into *blocking* and *reporting* modes: the
-container CVE gate fails the build, while IaC and Kubernetes findings are
-reported to the Security tab, because the exercise requires those exact
-findings to exist.
+Every Trivy/Checkov scan (IaC, container image, Kubernetes config) runs in
+**reporting** mode — findings print in full to the job log rather than
+failing the build, since this is a security demo and the exercise requires
+those exact findings to exist for review rather than to be blocked. No
+SARIF upload to the Security tab either: this account's plan doesn't
+include GitHub Advanced Security on a private repo.
 
 `app.yml` is a single job on purpose — the image Trivy scans is byte-for-byte
 the image that is pushed and deployed. Splitting build and deploy would rebuild

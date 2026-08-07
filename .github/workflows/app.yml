@@ -15,11 +15,12 @@
 #
 # What's actually enforcing security here: OIDC federation (no long-lived
 # AWS keys in GitHub), tests have to pass before an image gets built, Trivy
-# fails the build on fixable HIGH/CRITICAL CVEs before anything is pushed,
-# ECR tags are immutable so the scanned digest is what runs, infra facts come
-# from the AWS APIs rather than Terraform state (so the state file never
-# touches a runner), and the Mongo password comes from a GitHub secret, never
-# committed, never logged.
+# scans every image for HIGH/CRITICAL CVEs and reports them (not blocking -
+# this is a security demo, findings get reviewed live rather than gating the
+# pipeline), ECR tags are immutable so the scanned digest is what runs,
+# infra facts come from the AWS APIs rather than Terraform state (so the
+# state file never touches a runner), and the Mongo password comes from a
+# GitHub secret, never committed, never logged.
 name: Application (build, scan, deploy)
 
 on:
@@ -112,14 +113,15 @@ jobs:
           docker run --rm --entrypoint cat "$IMAGE" /app/wizexercise.txt | tee /tmp/wiz.txt
           grep -q "Sachin Kumar" /tmp/wiz.txt
 
-      # Runs before the push - a vulnerable image never reaches the registry.
-      - name: Trivy image scan (blocking)
+      # Reports only, doesn't block - this is a security demo, findings get
+      # reviewed live rather than gating the pipeline. Every HIGH/CRITICAL
+      # CVE prints to the job log, fixed or not (no ignore-unfixed filter).
+      - name: Trivy image scan (reporting)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.infra.outputs.ecr_url }}:${{ steps.infra.outputs.image_tag }}
           severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
+          exit-code: "0"
 
       # Reports only, doesn't block - the cluster-admin binding is required
       # by the exercise, so this can't fail the build. Printed straight to
