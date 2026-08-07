@@ -4,18 +4,22 @@
 # not a stated requirement, and it's a flat ~$33/month regardless of traffic.
 #
 # What actually needs outbound access, checked against this repo rather than
-# assumed: pulling the app image from our own ECR repo, and pulling
+# assumed: pulling the app image from our own ECR repo, pulling
 # vpc-cni/coredns/kube-proxy from AWS's regional ECR (not Docker Hub, not the
-# public gallery). Nothing else - EKS API is already reachable privately,
-# IMDSv2 never touches the network, and the app only talks to Mongo inside
-# this VPC.
+# public gallery), and STS - every node's kubelet authenticates to the
+# cluster with a short-lived IAM token (aws-iam-authenticator, under the
+# hood an STS GetCallerIdentity call), so nodes never actually register as
+# Kubernetes nodes without a path to STS, even though the EC2 instances
+# themselves boot and pass health checks fine. EKS API itself is already
+# reachable privately, IMDSv2 never touches the network, and the app only
+# talks to Mongo inside this VPC.
 #
 # Skipped SSM Session Manager into the nodes: not required (the exercise
 # asks for kubectl, not node shell access) and the ssm/ssmmessages/ec2messages
 # endpoints would've added ~$44/month for nothing this demonstrates.
 #
-# End result: ECR (api + dkr) plus the free S3 gateway endpoint, ~$29/month -
-# cheaper than the NAT gateway it replaces, and private subnets still have no
+# End result: ECR (api + dkr) + STS, plus the free S3 gateway endpoint -
+# still cheaper than the NAT gateway it replaces, and private subnets still have no
 # path to the public internet at all.
 
 data "aws_region" "current" {}
@@ -58,6 +62,7 @@ locals {
   interface_endpoints = toset([
     "ecr.api", # authenticate + resolve image manifests
     "ecr.dkr", # pull image layers
+    "sts",     # kubelet's IAM auth token exchange - nodes can't join without this
   ])
 }
 
