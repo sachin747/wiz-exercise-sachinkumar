@@ -75,9 +75,15 @@ jobs:
           output_file_path: console,checkov.sarif
           soft_fail: true
 
+      # Repo is private and this account's plan doesn't include Advanced
+      # Security, so code scanning isn't available yet - this step would
+      # fail every run otherwise. Checkov's own findings are still printed
+      # in full above (output_format: cli); this just skips the Security
+      # tab upload. Drop continue-on-error once the repo goes public.
       - name: Upload Checkov results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
+        continue-on-error: true
         with:
           sarif_file: checkov.sarif
           category: checkov-iac
