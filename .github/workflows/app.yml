@@ -115,7 +115,7 @@ jobs:
 
       # Runs before the push - a vulnerable image never reaches the registry.
       - name: Trivy image scan (blocking)
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: ${{ steps.infra.outputs.ecr_url }}:${{ steps.infra.outputs.image_tag }}
           severity: HIGH,CRITICAL
@@ -126,7 +126,7 @@ jobs:
       # by the exercise, so this can't fail the build. Findings still show
       # up in the Security tab.
       - name: Trivy Kubernetes config scan (reporting)
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           scan-type: config
           scan-ref: k8s/

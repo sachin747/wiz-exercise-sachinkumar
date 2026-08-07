@@ -189,7 +189,6 @@ image scan **blocking** → push → deploy → verify running pod)
 Repository-level controls:
 
 - `.github/CODEOWNERS` — review required on every change, tightest on `infra/`
-- `.github/dependabot.yml` — weekly Maven, Actions, Docker and Terraform updates
 - gitleaks secret scanning on every infra run; SARIF uploaded to the Security tab
 - `environment: aws` on every AWS-touching job, so you can require a manual
   approver before `apply`
