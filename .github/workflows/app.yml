@@ -1,0 +1,236 @@
+# Pipeline 2 of 2 - application. Flow is: test -> build image -> verify
+# wizexercise.txt -> scan image -> push to ECR -> create secret -> apply ->
+# set image -> verify.
+#
+# One job on purpose - the image Trivy scans has to be byte-for-byte what
+# gets pushed and deployed. Split it into two jobs and you risk rebuilding
+# between scan and deploy, shipping something that was never actually
+# scanned.
+#
+# Real Ingress in front of the app now (k8s/ingress.yaml), served by the AWS
+# Load Balancer Controller (k8s/alb-controller.yaml). That manifest is a
+# generated artifact, not something this pipeline installs via Helm - see
+# its header and render-alb-controller.ps1 for how it's produced. Nothing
+# here runs Helm; it's plain kubectl apply, same as everything else in k8s/.
+#
+# What's actually enforcing security here: OIDC federation (no long-lived
+# AWS keys in GitHub), tests have to pass before an image gets built, Trivy
+# fails the build on fixable HIGH/CRITICAL CVEs before anything is pushed,
+# ECR tags are immutable so the scanned digest is what runs, infra facts come
+# from the AWS APIs rather than Terraform state (so the state file never
+# touches a runner), and the Mongo password comes from a GitHub secret, never
+# committed, never logged.
+name: Application (build, scan, deploy)
+
+on:
+  push:
+    branches: [main]
+    # Explicit allowlist, not paths-ignore: this pipeline only needs to run
+    # when the app, its container, or its Kubernetes manifests change. This
+    # also keeps it from racing infra.yml on a push that touches both.
+    paths: ["src/**", "pom.xml", "Dockerfile", "k8s/**", ".github/workflows/app.yml"]
+  pull_request:
+    paths: ["src/**", "pom.xml", "Dockerfile", "k8s/**", ".github/workflows/app.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  security-events: write
+
+concurrency:
+  group: application
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: us-east-2
+  PROJECT_NAME: sachin-app
+  CLUSTER_NAME: sachin-app-cluster
+  NAMESPACE: secure-todo
+
+jobs:
+  ship:
+    name: Build, scan and deploy
+    runs-on: ubuntu-latest
+    environment: aws
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Run tests
+        run: mvn -B verify
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Resource names are deterministic (set in infra/terraform), so the
+      # pipeline can discover everything it needs from the AWS APIs.
+      - name: Discover infrastructure
+        id: infra
+        run: |
+          set -euo pipefail
+          {
+            echo "ecr_url=$(aws ecr describe-repositories \
+              --repository-names "$PROJECT_NAME" \
+              --query 'repositories[0].repositoryUri' --output text)"
+
+            echo "mongo_ip=$(aws ec2 describe-instances \
+              --filters "Name=tag:Name,Values=$PROJECT_NAME-mongodb" \
+                        "Name=instance-state-name,Values=running" \
+              --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)"
+
+            echo "alb_role_arn=$(aws iam get-role \
+              --role-name "$PROJECT_NAME-alb-controller" \
+              --query 'Role.Arn' --output text)"
+
+            echo "image_tag=${GITHUB_SHA::12}"
+          } >>"$GITHUB_OUTPUT"
+
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build image
+        env:
+          IMAGE: ${{ steps.infra.outputs.ecr_url }}:${{ steps.infra.outputs.image_tag }}
+        run: docker build -t "$IMAGE" .
+
+      # First of two wizexercise.txt checks (PDF wants proof it's in the
+      # running container, not just the Dockerfile) - this one's against the
+      # freshly built image, the second one below runs against the live pod.
+      - name: Verify wizexercise.txt is in the image
+        env:
+          IMAGE: ${{ steps.infra.outputs.ecr_url }}:${{ steps.infra.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint cat "$IMAGE" /app/wizexercise.txt | tee /tmp/wiz.txt
+          grep -q "Sachin Kumar" /tmp/wiz.txt
+
+      # Runs before the push - a vulnerable image never reaches the registry.
+      - name: Trivy image scan (blocking)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ steps.infra.outputs.ecr_url }}:${{ steps.infra.outputs.image_tag }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      # Reports only, doesn't block - the cluster-admin binding is required
+      # by the exercise, so this can't fail the build. Findings still show
+      # up in the Security tab.
+      - name: Trivy Kubernetes config scan (reporting)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: config
+          scan-ref: k8s/
+          format: sarif
+          output: trivy-k8s.sarif
+          exit-code: "0"
+
+      - name: Upload Kubernetes scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-k8s.sarif
+          category: trivy-k8s
+
+      # Everything from here down is skipped on pull requests.
+
+      - name: Push image
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.infra.outputs.ecr_url }}:${{ steps.infra.outputs.image_tag }}
+        run: docker push "$IMAGE"
+
+      - name: Configure kubectl
+        if: github.event_name != 'pull_request'
+        run: aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
+      # No Secrets Manager: MONGO_APP_PASSWORD is the same plain GitHub
+      # secret Terraform used to create the Mongo user in the first place
+      # (infra.yml passes it as -var="mongo_app_password=..."). One
+      # credential, one source of truth.
+      - name: Create application secret
+        if: github.event_name != 'pull_request'
+        env:
+          MONGO_APP_PASSWORD: ${{ secrets.MONGO_APP_PASSWORD }}
+          TODO_USER_PASSWORD: ${{ secrets.TODO_USER_PASSWORD }}
+          TODO_ADMIN_PASSWORD: ${{ secrets.TODO_ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          kubectl apply -f k8s/namespace.yaml
+          kubectl create secret generic secure-todo-secrets \
+            --namespace "$NAMESPACE" \
+            --from-literal=mongodb-uri="mongodb://todo_app:$MONGO_APP_PASSWORD@${{ steps.infra.outputs.mongo_ip }}:27017/todo?authSource=todo" \
+            --from-literal=user-name=todo-user \
+            --from-literal=user-password="$TODO_USER_PASSWORD" \
+            --from-literal=admin-name=todo-admin \
+            --from-literal=admin-password="$TODO_ADMIN_PASSWORD" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # No Kustomize, no Helm at runtime - everything here is plain kubectl
+      # apply. Order matters more than it used to now that the ALB
+      # controller is in the mix: its ServiceAccount needs the real IAM role
+      # annotated before its pods start (or they come up without IRSA
+      # credentials and don't get them until the next restart), and the
+      # Ingress needs the controller's webhook already serving before
+      # anything tries to validate it against a failurePolicy: Fail webhook.
+      - name: Deploy to Kubernetes
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.infra.outputs.ecr_url }}:${{ steps.infra.outputs.image_tag }}
+          ALB_ROLE_ARN: ${{ steps.infra.outputs.alb_role_arn }}
+        run: |
+          set -euo pipefail
+
+          kubectl apply -f k8s/alb-controller-serviceaccount.yaml
+          kubectl annotate serviceaccount aws-load-balancer-controller -n kube-system \
+            eks.amazonaws.com/role-arn="$ALB_ROLE_ARN" --overwrite
+          kubectl apply -f k8s/alb-controller.yaml
+          kubectl rollout status deployment/aws-load-balancer-controller -n kube-system --timeout=3m
+
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/rbac.yaml
+          kubectl apply -f k8s/network-policy.yaml
+          kubectl apply -f k8s/service.yaml
+          kubectl apply -f k8s/deployment.yaml
+          kubectl set image deployment/secure-todo "application=$IMAGE" -n "$NAMESPACE"
+          kubectl rollout status deployment/secure-todo -n "$NAMESPACE" --timeout=5m
+
+          # Last: the controller is confirmed ready by the rollout status
+          # above, so its validating webhook is there to actually check this.
+          kubectl apply -f k8s/ingress.yaml
+
+      # Second wizexercise.txt check - this time against the running pod,
+      # not just the built image.
+      - name: Verify running pod and publish URL
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+
+          # The ALB hostname takes a few minutes to be provisioned after the
+          # Ingress first appears (the controller has to actually create it
+          # via the AWS API); poll rather than fail on a first miss.
+          hostname=""
+          for i in $(seq 1 30); do
+            hostname=$(kubectl get ingress secure-todo -n "$NAMESPACE" \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' || true)
+            [ -n "$hostname" ] && break
+            sleep 10
+          done
+
+          {
+            echo "### wizexercise.txt inside the running pod"
+            echo '```'
+            kubectl exec -n "$NAMESPACE" deploy/secure-todo -- cat /app/wizexercise.txt
+            echo '```'
+            echo "### Application URL"
+            echo '```'
+            echo "http://${hostname:-<not assigned yet - see kubectl get ingress secure-todo -n secure-todo>}"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"

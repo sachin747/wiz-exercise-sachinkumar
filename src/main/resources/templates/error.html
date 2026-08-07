@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Something went wrong | Focus</title>
+    <link rel="stylesheet" th:href="@{/css/app.css}" href="/css/app.css">
+</head>
+<body class="auth-page">
+<main class="error-card">
+    <div class="mark" aria-hidden="true">!</div>
+    <p class="eyebrow">Unexpected detour</p>
+    <h1>Something went wrong.</h1>
+    <p class="muted">The request could not be completed. Please return to your list and try again.</p>
+    <a class="button button-primary" th:href="@{/todos}" href="/todos">Back to todos</a>
+</main>
+</body>
+</html>

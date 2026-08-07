@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>My todos | Focus</title>
+    <link rel="stylesheet" th:href="@{/css/app.css}" href="/css/app.css">
+</head>
+<body>
+<header class="site-header">
+    <a class="logo" th:href="@{/todos}" href="/todos" aria-label="Focus home">
+        <span class="mark" aria-hidden="true">F</span>
+        <span>Focus</span>
+    </a>
+    <div class="account-actions">
+        <span class="user-pill" th:text="${username}">todo-user</span>
+        <form th:action="@{/logout}" method="post">
+            <button class="button button-quiet" type="submit">Sign out</button>
+        </form>
+    </div>
+</header>
+
+<main class="page-shell">
+    <section class="hero-row">
+        <div>
+            <p class="eyebrow">Your workspace</p>
+            <h1>Make space for what matters.</h1>
+            <p class="muted">Capture the next step, finish it, move on.</p>
+        </div>
+        <div class="progress-card" aria-label="Todo summary">
+            <strong th:text="${#lists.size(todos)}">0</strong>
+            <span th:text="${#lists.size(todos) == 1 ? 'item' : 'items'}">items</span>
+        </div>
+    </section>
+
+    <div class="alert alert-success" role="status" th:if="${successMessage}" th:text="${successMessage}"></div>
+    <div class="alert alert-error" role="alert" th:if="${errorMessage}" th:text="${errorMessage}"></div>
+
+    <section class="content-grid">
+        <aside class="composer-card" aria-labelledby="new-todo-heading">
+            <p class="eyebrow">New item</p>
+            <h2 id="new-todo-heading">What needs doing?</h2>
+            <form class="stack-form" th:action="@{/todos}" th:object="${todoForm}" method="post">
+                <label for="title">Title</label>
+                <input id="title" th:field="*{title}" type="text" maxlength="120"
+                       placeholder="Prepare demo walkthrough" required>
+                <p class="field-error" th:if="${#fields.hasErrors('title')}" th:errors="*{title}"></p>
+
+                <label for="description">Details <span class="optional">optional</span></label>
+                <textarea id="description" th:field="*{description}" maxlength="500" rows="5"
+                          placeholder="Add enough context for future you"></textarea>
+                <p class="field-error" th:if="${#fields.hasErrors('description')}" th:errors="*{description}"></p>
+
+                <button class="button button-primary button-full" type="submit">Add todo</button>
+            </form>
+        </aside>
+
+        <section class="todo-panel" aria-labelledby="todo-list-heading">
+            <div class="section-heading">
+                <div>
+                    <p class="eyebrow">Current list</p>
+                    <h2 id="todo-list-heading">Todos</h2>
+                </div>
+            </div>
+
+            <div class="empty-state" th:if="${#lists.isEmpty(todos)}">
+                <div class="empty-icon" aria-hidden="true">✓</div>
+                <h3>Nothing on the list</h3>
+                <p>Add a todo and give your day a clear next step.</p>
+            </div>
+
+            <ol class="todo-list" th:unless="${#lists.isEmpty(todos)}">
+                <li class="todo-item" th:each="todo : ${todos}" th:classappend="${todo.completed} ? 'is-complete'">
+                    <form th:action="@{/todos/{id}/toggle(id=${todo.id})}" method="post">
+                        <button class="check-button" type="submit"
+                                th:attr="aria-label=${todo.completed ? 'Mark ' + todo.title + ' incomplete' : 'Mark ' + todo.title + ' complete'}">
+                            <span aria-hidden="true" th:text="${todo.completed} ? '✓' : ''"></span>
+                        </button>
+                    </form>
+                    <div class="todo-copy">
+                        <h3 th:text="${todo.title}">Todo title</h3>
+                        <p th:if="${!#strings.isEmpty(todo.description)}" th:text="${todo.description}">Todo details</p>
+                    </div>
+                    <form th:action="@{/todos/{id}/delete(id=${todo.id})}" method="post">
+                        <button class="delete-button" type="submit" th:attr="aria-label=${'Delete ' + todo.title}">Delete</button>
+                    </form>
+                </li>
+            </ol>
+        </section>
+    </section>
+</main>
+
+<footer>
+    <p>Focus · Spring Boot · MongoDB</p>
+</footer>
+</body>
+</html>

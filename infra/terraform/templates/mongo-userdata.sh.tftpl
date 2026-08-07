@@ -1,0 +1,100 @@
+#!/bin/bash
+# MongoDB bootstrap for Amazon Linux 2.
+#   1. install a deliberately outdated MongoDB
+#   2. create the application user and turn ON database authentication
+#   3. install a daily backup cron job that writes to the S3 bucket
+set -euo pipefail
+exec > >(tee /var/log/mongo-bootstrap.log | logger -t mongo-bootstrap) 2>&1
+
+# jq dropped: only needed for the old Secrets Manager JSON parsing.
+yum install -y awscli cronie
+
+cat >/etc/yum.repos.d/mongodb-org-${mongo_major}.repo <<'REPO'
+[mongodb-org-${mongo_major}]
+name=MongoDB Repository
+baseurl=https://repo.mongodb.org/yum/amazon/2/mongodb-org/${mongo_major}/x86_64/
+gpgcheck=1
+enabled=1
+gpgkey=https://pgp.mongodb.com/server-${mongo_major}.asc
+REPO
+
+yum install -y \
+  mongodb-org-${mongo_version} \
+  mongodb-org-server-${mongo_version} \
+  mongodb-org-mongos-${mongo_version} \
+  mongodb-org-tools-${mongo_version} \
+  mongodb-org-database-tools-extra-${mongo_version} \
+  mongodb-mongosh
+
+# Pin the version so `yum update` cannot silently patch away the finding.
+echo 'exclude=mongodb-org,mongodb-org-server,mongodb-org-mongos,mongodb-org-tools,mongodb-mongosh' >>/etc/yum.conf
+
+# Phase 1: listen on loopback only while we create the user.
+cat >/etc/mongod.conf <<'CONF'
+storage:
+  dbPath: /var/lib/mongo
+systemLog:
+  destination: file
+  logAppend: true
+  path: /var/log/mongodb/mongod.log
+net:
+  port: 27017
+  bindIp: 127.0.0.1
+processManagement:
+  timeZoneInfo: /usr/share/zoneinfo
+CONF
+
+systemctl enable --now mongod
+until mongosh --quiet --eval 'db.adminCommand("ping").ok' >/dev/null 2>&1; do sleep 3; done
+
+# No Secrets Manager: the app user's credentials are baked in here by
+# Terraform's templatefile() at apply time (var.mongo_app_password, sourced
+# from the MONGO_APP_PASSWORD GitHub secret). Nothing is fetched at boot.
+mongosh --quiet ${database_name} --eval \
+  "db.createUser({user:'${app_username}',pwd:'${app_password}',roles:[{role:'readWrite',db:'${database_name}'}]})"
+
+# Phase 2: accept connections from the EKS nodes, with authentication REQUIRED.
+# Network reachability is separately restricted by the security group.
+cat >/etc/mongod.conf <<'CONF'
+storage:
+  dbPath: /var/lib/mongo
+systemLog:
+  destination: file
+  logAppend: true
+  path: /var/log/mongodb/mongod.log
+net:
+  port: 27017
+  bindIp: 0.0.0.0
+processManagement:
+  timeZoneInfo: /usr/share/zoneinfo
+security:
+  authorization: enabled
+CONF
+
+systemctl restart mongod
+
+# Daily backup to the (deliberately public) S3 bucket.
+# No Secrets Manager here either - password's baked into this file by
+# Terraform at apply time, same as the user-creation step above. Downside of
+# dropping Secrets Manager: the credential now sits on disk in this one file
+# instead of being fetched fresh each run. Root-owned, mode 0750, on a VM the
+# exercise already has you demoing SSH access to anyway.
+cat >/usr/local/bin/mongodb-backup <<'BACKUP'
+#!/bin/bash
+set -euo pipefail
+ARCHIVE="${database_name}-$(date -u +%Y%m%dT%H%M%SZ).archive.gz"
+mongodump --host 127.0.0.1 --port 27017 --db ${database_name} \
+  --authenticationDatabase ${database_name} \
+  --username "${app_username}" --password "${app_password}" \
+  --archive="/tmp/$ARCHIVE" --gzip
+aws s3 cp "/tmp/$ARCHIVE" "s3://${backup_bucket}/daily/$ARCHIVE" --region ${aws_region} --only-show-errors
+rm -f "/tmp/$ARCHIVE"
+BACKUP
+
+chmod 0750 /usr/local/bin/mongodb-backup
+printf '15 2 * * * root /usr/local/bin/mongodb-backup\n' >/etc/cron.d/mongodb-backup
+chmod 0644 /etc/cron.d/mongodb-backup
+systemctl enable --now crond
+
+# Seed one backup immediately so the demo has an object to show.
+/usr/local/bin/mongodb-backup || true

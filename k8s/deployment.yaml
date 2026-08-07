@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secure-todo
+  namespace: secure-todo
+  labels:
+    app.kubernetes.io/name: secure-todo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: secure-todo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: secure-todo
+    spec:
+      serviceAccountName: secure-todo
+      automountServiceAccountToken: true # see k8s/rbac.yaml - deliberate
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: application
+          # Overwritten after apply by:
+          #   kubectl set image deployment/secure-todo application=<ecr-uri>:<tag> -n secure-todo
+          # See .github/workflows/app.yml and COMMANDS.md §5.
+          image: REPLACED_BY_PIPELINE
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Mongo access via env var, per the PDF requirement.
+            - name: MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: secure-todo-secrets
+                  key: mongodb-uri
+            - name: APP_USER_NAME
+              valueFrom:
+                secretKeyRef: { name: secure-todo-secrets, key: user-name }
+            - name: APP_USER_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: secure-todo-secrets, key: user-password }
+            - name: APP_ADMIN_NAME
+              valueFrom:
+                secretKeyRef: { name: secure-todo-secrets, key: admin-name }
+            - name: APP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: secure-todo-secrets, key: admin-password }
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            initialDelaySeconds: 40
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsUser: 10001
+            runAsGroup: 10001
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

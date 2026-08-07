@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: secure-todo
+  labels:
+    app.kubernetes.io/part-of: secure-todo
+    # Pod Security Admission, set to restricted. API server rejects any pod
+    # here that asks for privilege escalation, host namespaces, hostPath
+    # volumes or extra capabilities - blocked at admission, not just flagged
+    # after the fact. Demo: `kubectl -n secure-todo run bad --image=busybox
+    # --privileged` gets refused outright.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign in | Focus</title>
+    <link rel="stylesheet" th:href="@{/css/app.css}" href="/css/app.css">
+</head>
+<body class="auth-page">
+<main class="auth-shell">
+    <section class="brand-panel" aria-labelledby="brand-heading">
+        <p class="eyebrow">Three-tier demo by Sachin Kumar</p>
+        <h1 id="brand-heading">Keep today clear.</h1>
+        <p>A todo list app FOCUS with a Spring Boot service layer and MongoDB persistence running on AWS.</p>
+        <div class="tier-list" aria-label="Application tiers">
+            <span>01 Presentation</span>
+            <span>02 Application</span>
+            <span>03 Data</span>
+        </div>
+    </section>
+
+    <section class="login-card" aria-labelledby="login-heading">
+        <div class="mark" aria-hidden="true">TODO App</div>
+        <p class="eyebrow">Welcome back</p>
+        <h2 id="login-heading">Sign in to FOCUS</h2>
+        <p class="muted">Your tasks are private to your account.</p>
+
+        <div class="alert alert-error" role="alert" th:if="${param.error}">
+            The username or password was not recognized.
+        </div>
+        <div class="alert alert-success" role="status" th:if="${param.logout}">
+            You have been signed out.
+        </div>
+        <div class="alert alert-success" role="status" th:if="${successMessage}" th:text="${successMessage}"></div>
+
+        <form class="stack-form" th:action="@{/login}" method="post">
+            <label for="username">Username</label>
+            <input id="username" name="username" type="text" autocomplete="username" required autofocus>
+
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+            <button class="button button-primary button-full" type="submit">Sign in</button>
+        </form>
+
+        <p class="muted" style="margin-top: 16px;">
+            New here? <a th:href="@{/signup}">Create an account</a>
+        </p>
+    </section>
+</main>
+</body>
+</html>

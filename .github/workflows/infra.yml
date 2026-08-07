@@ -1,0 +1,181 @@
+# Pipeline 1 of 2 - infrastructure as code. Pull request runs scan + plan
+# (no AWS mutation), push to main runs scan + apply, manual dispatch can do
+# any of plan/apply/destroy.
+#
+# OIDC federation means no long-lived AWS keys in GitHub. Checkov + Trivy
+# scan the IaC before anything ever applies. environment: aws lets apply
+# require a manual reviewer if you turn that on. The concurrency group stops
+# two applies from racing on the same state file.
+name: Infrastructure (Terraform)
+
+on:
+  pull_request:
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+  push:
+    branches: [main]
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Terraform action to run
+        type: choice
+        options: [plan, apply, destroy]
+        default: plan
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+  security-events: write
+
+concurrency:
+  group: infrastructure
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-2
+  TF_DIR: infra/terraform
+
+jobs:
+  # Gate 1: static analysis, before any of this touches AWS.
+  scan:
+    name: Scan IaC
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive infra/
+
+      - name: terraform validate
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      # soft_fail because the deliberate weaknesses are expected findings -
+      # this reports into the Security tab instead of failing the build.
+      # Reviewed live in the presentation instead.
+      - name: Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: infra/
+          framework: terraform
+          output_format: cli,sarif
+          output_file_path: console,checkov.sarif
+          soft_fail: true
+
+      - name: Upload Checkov results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov.sarif
+          category: checkov-iac
+
+      - name: Trivy IaC scan
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: config
+          scan-ref: infra/
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+
+      - name: Detect committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Gate 2: plan, runs on every PR so reviewers see the diff.
+  plan:
+    name: Plan
+    needs: scan
+    if: github.event_name != 'workflow_dispatch' || inputs.action == 'plan'
+    runs-on: ubuntu-latest
+    environment: aws
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Plan
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          terraform plan -no-color -input=false \
+            -var="ssh_public_key=${{ vars.MONGO_SSH_PUBLIC_KEY }}" \
+            -var="cluster_admin_role_arn=${{ vars.CLUSTER_ADMIN_ROLE_ARN }}" \
+            -var="mongo_app_password=${{ secrets.MONGO_APP_PASSWORD }}"
+
+  # Gate 3: apply, only from main or an explicit manual dispatch.
+  apply:
+    name: Apply
+    needs: scan
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'apply')
+    runs-on: ubuntu-latest
+    environment: aws
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Apply
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          terraform apply -auto-approve -input=false \
+            -var="ssh_public_key=${{ vars.MONGO_SSH_PUBLIC_KEY }}" \
+            -var="cluster_admin_role_arn=${{ vars.CLUSTER_ADMIN_ROLE_ARN }}" \
+            -var="mongo_app_password=${{ secrets.MONGO_APP_PASSWORD }}"
+
+      - name: Summarise outputs
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          {
+            echo "### Infrastructure outputs"
+            echo '```'
+            terraform output
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  destroy:
+    name: Destroy
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
+    runs-on: ubuntu-latest
+    environment: aws
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Destroy
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          terraform destroy -auto-approve -input=false \
+            -var="ssh_public_key=${{ vars.MONGO_SSH_PUBLIC_KEY }}" \
+            -var="cluster_admin_role_arn=${{ vars.CLUSTER_ADMIN_ROLE_ARN }}" \
+            -var="mongo_app_password=${{ secrets.MONGO_APP_PASSWORD }}"

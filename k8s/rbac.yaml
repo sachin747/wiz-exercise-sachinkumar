@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: secure-todo
+  namespace: secure-todo
+# Pod gets a mounted API token it has no functional need for - half of the
+# cluster-admin weakness below, the token is what actually makes it usable.
+automountServiceAccountToken: true
+---
+# Cluster-wide admin, straight from the PDF: "Container application must be
+# assigned a cluster-wide kubernetes admin role and privilege". Combined with
+# the mounted token above, RCE inside the todo container = the whole cluster.
+#
+# GuardDuty's EKS Audit Log Monitoring picks this up
+# (Policy:Kubernetes/AdminAccessToDefaultServiceAccount,
+# PrivilegeEscalation:Kubernetes/PrivilegedContainer). Trivy's Kubernetes
+# config scan in the app pipeline also reports it - not blocking, since the
+# exercise requires this to actually be there.
+#
+# Demo:
+#   kubectl -n secure-todo exec deploy/secure-todo -- \
+#     sh -c 'wget -qO- --no-check-certificate \
+#       --header="Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+#       https://kubernetes.default.svc/api/v1/secrets'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: secure-todo-cluster-admin
+  labels:
+    exercise.wiz.io/intentional-weakness: "true"
+subjects:
+  - kind: ServiceAccount
+    name: secure-todo
+    namespace: secure-todo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin

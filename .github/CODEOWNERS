@@ -1,0 +1,9 @@
+# Repository security control: every change requires review by the code owner.
+# Pair this with a branch protection rule on `main` that requires:
+#   - a pull request before merging
+#   - the "Scan IaC" and "Test, build and scan" checks to pass
+#   - review from Code Owners
+#   - signed commits
+*                     @sachin
+/infra/               @sachin
+/.github/workflows/   @sachin

@@ -1,0 +1,42 @@
+spring:
+  application:
+    name: secure-todo
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://todo_app:todo_dev_password@localhost:27017/todo?authSource=todo}
+      auto-index-creation: true
+  thymeleaf:
+    cache: true
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: strict
+        secure: ${SESSION_COOKIE_SECURE:false}
+      timeout: 30m
+  forward-headers-strategy: framework
+  error:
+    include-message: never
+    include-stacktrace: never
+
+app:
+  security:
+    user-name: ${APP_USER_NAME:todo-user}
+    user-password: ${APP_USER_PASSWORD:todo-user-change-me}
+    admin-name: ${APP_ADMIN_NAME:todo-admin}
+    admin-password: ${APP_ADMIN_PASSWORD:todo-admin-change-me}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never

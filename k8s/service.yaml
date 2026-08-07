@@ -1,0 +1,17 @@
+# ClusterIP now that k8s/ingress.yaml + the AWS Load Balancer Controller
+# provision the real ALB in front of this. Previously this was type:
+# LoadBalancer (a bare NLB, no controller needed) - see eks.tf for the
+# history of that trade-off and why it changed.
+apiVersion: v1
+kind: Service
+metadata:
+  name: secure-todo
+  namespace: secure-todo
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: secure-todo
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

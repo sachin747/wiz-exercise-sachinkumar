@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign up | Focus</title>
+    <link rel="stylesheet" th:href="@{/css/app.css}" href="/css/app.css">
+</head>
+<body class="auth-page">
+<main class="auth-shell">
+    <section class="brand-panel" aria-labelledby="brand-heading">
+        <p class="eyebrow">Three-tier demo by Sachin Kumar</p>
+        <h1 id="brand-heading">Keep today clear.</h1>
+        <p>A todo list app FOCUS with a Spring Boot service layer and MongoDB persistence running on AWS.</p>
+        <div class="tier-list" aria-label="Application tiers">
+            <span>01 Presentation</span>
+            <span>02 Application</span>
+            <span>03 Data</span>
+        </div>
+    </section>
+
+    <section class="login-card" aria-labelledby="signup-heading">
+        <div class="mark" aria-hidden="true">TODO App</div>
+        <p class="eyebrow">New here</p>
+        <h2 id="signup-heading">Create your account</h2>
+        <p class="muted">Todos you add are private to this account.</p>
+
+        <form class="stack-form" th:action="@{/signup}" th:object="${signupForm}" method="post">
+            <label for="username">Username</label>
+            <input id="username" th:field="*{username}" type="text" autocomplete="username" autofocus>
+            <p class="field-error" th:if="${#fields.hasErrors('username')}" th:errors="*{username}"></p>
+
+            <label for="password">Password</label>
+            <input id="password" th:field="*{password}" type="password" autocomplete="new-password">
+            <p class="field-error" th:if="${#fields.hasErrors('password')}" th:errors="*{password}"></p>
+
+            <button class="button button-primary button-full" type="submit">Sign up</button>
+        </form>
+
+        <p class="muted" style="margin-top: 16px;">
+            Already have an account? <a th:href="@{/login}">Sign in</a>
+        </p>
+    </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,52 @@
+# Local dry-run of the AWS environment.
+#
+#   docker compose up --build
+#   -> http://localhost:8080
+#
+# This exercises the real Dockerfile, so it also proves wizexercise.txt is in
+# the image and that the app reaches MongoDB over MONGODB_URI exactly the way
+# the Kubernetes deployment does.
+services:
+  mongodb:
+    # Matches the version deployed on the AWS VM (deliberately outdated), so
+    # the local test is representative of production.
+    image: mongo:6.0
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: local_root_change_me
+      MONGO_INITDB_DATABASE: todo
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongo-data:/data/db
+      - ./docker/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      # Same injection mechanism as k8s/deployment.yaml, different source.
+      # Host is the compose service name, not localhost.
+      MONGODB_URI: mongodb://todo_app:todo_dev_password@mongodb:27017/todo?authSource=todo
+      APP_USER_NAME: todo-user
+      APP_USER_PASSWORD: todo-user-local
+      APP_ADMIN_NAME: todo-admin
+      APP_ADMIN_PASSWORD: todo-admin-local
+      # No TLS in front of the app locally, so the session cookie cannot be
+      # Secure-only or the browser will drop it.
+      SESSION_COOKIE_SECURE: "false"
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  mongo-data:

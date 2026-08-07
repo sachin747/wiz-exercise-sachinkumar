@@ -1,0 +1,28 @@
+.DS_Store
+.idea/
+.vscode/
+*.iml
+target/
+tmp/
+.env
+*.log
+
+# Never commit a real Kubernetes secret
+k8s/secret.yaml
+
+# Scratch scripts/output from local testing (see COMMANDS.md) - these get
+# written and deleted throughout development, never meant to be committed
+k8s-rendered-preview.yaml
+local-k8s-run.*
+local-verify-*.*
+run-local-*.*
+run-verify-*.*
+verify-data-*.*
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log

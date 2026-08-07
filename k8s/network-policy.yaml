@@ -1,0 +1,57 @@
+# Egress lockdown for the app pod - preventative control, east-west this
+# time. network.tf/vpc-endpoints.tf already kill north-south egress (no
+# route out of the VPC), but without this, a compromised pod could still
+# reach anything else inside the cluster/VPC. This pins it down to exactly
+# what the app needs.
+#
+# Needs the VPC CNI's NetworkPolicy enforcement turned on
+# (eks.tf: aws_eks_addon.core["vpc-cni"].configuration_values) or this object
+# applies cleanly and does nothing.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: secure-todo-egress
+  namespace: secure-todo
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: secure-todo
+  policyTypes:
+    - Egress
+  egress:
+    # MongoDB. The app connects by IP, not by DNS name (MONGODB_URI embeds
+    # the VM's private IP directly), so this only needs to cover the public
+    # subnets the VM lives in (network.tf: 10.20.0.0/24 + 10.20.1.0/24).
+    - to:
+        - ipBlock:
+            cidr: 10.20.0.0/23
+      ports:
+        - protocol: TCP
+          port: 27017
+
+    # DNS, via CoreDNS in kube-system. Needed even though Mongo itself is
+    # reached by IP -- see the note below on the cluster-admin demo.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+# Left out on purpose: the Kubernetes API server (kubernetes.default.svc),
+# which the cluster-admin demo in COMMANDS.md section 7 needs
+# (`wget ... https://kubernetes.default.svc/api/v1/secrets` from inside this
+# pod, proving the blast radius of the cluster-admin binding in rbac.yaml).
+#
+# Whether an ipBlock rule for that traffic needs the API server's ClusterIP
+# or its real backend IP depends on where the VPC CNI's eBPF agent evaluates
+# egress relative to kube-proxy's DNAT - not confident enough to assert
+# without testing against the live cluster. Rather than guess and risk that
+# demo failing on stage: pull this policy for that one proof, then reapply
+# it. Documented in COMMANDS.md section 7.
