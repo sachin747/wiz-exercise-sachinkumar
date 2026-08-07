@@ -98,13 +98,29 @@ data "aws_iam_policy_document" "github_assume_role" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Scoped to this repository only. Any branch/environment inside it may
-    # assume the role; tighten to `:ref:refs/heads/main` if you want to lock
-    # deployment to the default branch.
+    # Extra, explicit scoping alongside the sub condition below - not
+    # strictly required by AWS, but narrows on the plain "owner/repo" name
+    # regardless of which subject format applies (see comment below).
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:repository"
+      values   = [var.github_repository]
+    }
+
+    # AWS requires a trust policy for this provider to scope on `sub` (or
+    # `job_workflow_ref`) specifically - a condition on `repository` alone
+    # is rejected as "not scoped to all". Repos created after 2026-07-15
+    # get GitHub's newer "immutable subject claims" format, which inserts
+    # numeric owner/repo IDs into `sub`
+    # (repo:OWNER@OWNER-ID/REPO@REPO-ID:ref:...) instead of the old plain
+    # repo:OWNER/REPO:ref:... form. Putting `*` right after the owner and
+    # repo names (instead of literal `@<id>`) matches both formats, so this
+    # doesn't need to change again if GitHub repos in this account straddle
+    # the cutover, or when this module bootstraps a repo created earlier.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:*"]
+      values   = ["repo:${replace(var.github_repository, "/", "*/")}*:*"]
     }
   }
 }
