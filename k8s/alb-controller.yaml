@@ -14,6 +14,12 @@
 # infra/terraform/files/alb-controller-iam-policy.json from the matching
 # upstream release at the same time - the IAM policy and the controller
 # version need to stay in step.
+#
+# The image: line below still points at public.ecr.aws, the chart's real
+# default - leave it as-is on re-render. There's no VPC endpoint for ECR
+# Public, so app.yml's Deploy step rewrites that line to a private ECR
+# mirror at apply time (infra.yml maintains the mirror; see ecr.tf) rather
+# than this file hardcoding any one AWS account's registry URL.
 ---
 # Source: aws-load-balancer-controller/crds/crds.yaml
 apiVersion: apiextensions.k8s.io/v1

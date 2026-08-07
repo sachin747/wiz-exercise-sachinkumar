@@ -92,6 +92,13 @@ jobs:
               --role-name "$PROJECT_NAME-alb-controller" \
               --query 'Role.Arn' --output text)"
 
+            # Mirror of public.ecr.aws/eks/aws-load-balancer-controller - see
+            # infra/terraform/ecr.tf and infra.yml's "Mirror ALB controller
+            # image" step. Nodes here have no route to ECR Public at all.
+            echo "alb_controller_ecr_url=$(aws ecr describe-repositories \
+              --repository-names "$PROJECT_NAME-alb-controller" \
+              --query 'repositories[0].repositoryUri' --output text)"
+
             echo "image_tag=${GITHUB_SHA::12}"
           } >>"$GITHUB_OUTPUT"
 
@@ -180,6 +187,7 @@ jobs:
         env:
           IMAGE: ${{ steps.infra.outputs.ecr_url }}:${{ steps.infra.outputs.image_tag }}
           ALB_ROLE_ARN: ${{ steps.infra.outputs.alb_role_arn }}
+          ALB_CONTROLLER_ECR_URL: ${{ steps.infra.outputs.alb_controller_ecr_url }}
         run: |
           set -euo pipefail
 
@@ -187,17 +195,27 @@ jobs:
           kubectl annotate serviceaccount aws-load-balancer-controller -n kube-system \
             eks.amazonaws.com/role-arn="$ALB_ROLE_ARN" --overwrite
 
-          # This file applies CRDs (ingressclassparams.elbv2.k8s.aws etc.) and
-          # an instance of that same kind (the default IngressClassParams) in
-          # one shot. The API server needs a moment to register a brand-new
-          # CRD's REST endpoint before it'll accept instances of it, so the
-          # first apply can fail on just that one resource - a known race
-          # with raw kubectl (Helm handles CRD-then-resource ordering
-          # internally; plain apply doesn't). Idempotent, so re-running it
-          # right after picks up whatever the first pass missed.
-          kubectl apply -f k8s/alb-controller.yaml || {
+          # k8s/alb-controller.yaml's image: line still points at
+          # public.ecr.aws (its render script's default output) - swapped
+          # here for the private mirror infra.yml maintains, so the file
+          # itself stays untouched by any one AWS account's ECR URL and
+          # this keeps working after a fresh render.
+          ALB_CONTROLLER_MANIFEST=$(sed \
+            "s|public\.ecr\.aws/eks/aws-load-balancer-controller:|${ALB_CONTROLLER_ECR_URL}:|" \
+            k8s/alb-controller.yaml)
+
+          # This manifest applies CRDs (ingressclassparams.elbv2.k8s.aws etc.)
+          # and an instance of that same kind (the default IngressClassParams)
+          # in one shot. The API server needs a moment to register a
+          # brand-new CRD's REST endpoint before it'll accept instances of
+          # it, so the first apply can fail on just that one resource - a
+          # known race with raw kubectl (Helm handles CRD-then-resource
+          # ordering internally; plain apply doesn't). Idempotent, so
+          # re-running it right after picks up whatever the first pass
+          # missed.
+          echo "$ALB_CONTROLLER_MANIFEST" | kubectl apply -f - || {
             sleep 5
-            kubectl apply -f k8s/alb-controller.yaml
+            echo "$ALB_CONTROLLER_MANIFEST" | kubectl apply -f -
           }
           kubectl rollout status deployment/aws-load-balancer-controller -n kube-system --timeout=3m
 

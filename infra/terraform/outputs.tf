@@ -6,6 +6,11 @@ output "ecr_repository_url" {
   value = aws_ecr_repository.app.repository_url
 }
 
+output "alb_controller_ecr_repository_url" {
+  description = "Mirror of public.ecr.aws/eks/aws-load-balancer-controller - see ecr.tf."
+  value       = aws_ecr_repository.alb_controller.repository_url
+}
+
 output "mongo_private_ip" {
   description = "Used to build MONGODB_URI for the Kubernetes secret."
   value       = aws_instance.mongo.private_ip

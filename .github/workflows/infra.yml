@@ -151,6 +151,32 @@ jobs:
             -var="cluster_admin_role_arn=${{ vars.CLUSTER_ADMIN_ROLE_ARN }}" \
             -var="mongo_app_password=${{ secrets.MONGO_APP_PASSWORD }}"
 
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      # public.ecr.aws has no VPC endpoint (AWS doesn't offer PrivateLink for
+      # ECR Public), so nodes in these NAT-less private subnets can never
+      # pull the ALB controller image straight from k8s/alb-controller.yaml's
+      # default source. Mirrors it into the private repo from ecr.tf instead
+      # - reads the tag out of the manifest itself so the two can't drift,
+      # and skips the copy if that tag's already there.
+      - name: Mirror ALB controller image
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          set -euo pipefail
+          SRC_IMAGE=$(grep -oP '(?<=image: ")public\.ecr\.aws/eks/aws-load-balancer-controller:[^"]+' ../../k8s/alb-controller.yaml)
+          TAG="${SRC_IMAGE##*:}"
+          DEST_REPO=$(terraform output -raw alb_controller_ecr_repository_url)
+          DEST_IMAGE="${DEST_REPO}:${TAG}"
+          REPO_NAME="${DEST_REPO#*/}"
+
+          if aws ecr describe-images --repository-name "$REPO_NAME" --image-ids imageTag="$TAG" --region "${{ vars.AWS_REGION }}" >/dev/null 2>&1; then
+            echo "Already mirrored: $DEST_IMAGE"
+          else
+            docker pull "$SRC_IMAGE"
+            docker tag "$SRC_IMAGE" "$DEST_IMAGE"
+            docker push "$DEST_IMAGE"
+          fi
+
       - name: Summarise outputs
         working-directory: ${{ env.TF_DIR }}
         run: |
