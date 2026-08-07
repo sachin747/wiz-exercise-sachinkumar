@@ -33,7 +33,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  AWS_REGION: us-east-2
+  # Single source of truth for region - set once as a repo variable, not
+  # edited here. Every terraform init/plan/apply/destroy below also passes
+  # it explicitly, so nothing silently falls back to variables.tf's default.
+  AWS_REGION: ${{ vars.AWS_REGION }}
   TF_DIR: infra/terraform
 
 jobs:
@@ -110,8 +113,11 @@ jobs:
       - name: Plan
         working-directory: ${{ env.TF_DIR }}
         run: |
-          terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ vars.AWS_REGION }}"
           terraform plan -no-color -input=false \
+            -var="aws_region=${{ vars.AWS_REGION }}" \
             -var="ssh_public_key=${{ vars.MONGO_SSH_PUBLIC_KEY }}" \
             -var="cluster_admin_role_arn=${{ vars.CLUSTER_ADMIN_ROLE_ARN }}" \
             -var="mongo_app_password=${{ secrets.MONGO_APP_PASSWORD }}"
@@ -139,8 +145,11 @@ jobs:
       - name: Apply
         working-directory: ${{ env.TF_DIR }}
         run: |
-          terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ vars.AWS_REGION }}"
           terraform apply -auto-approve -input=false \
+            -var="aws_region=${{ vars.AWS_REGION }}" \
             -var="ssh_public_key=${{ vars.MONGO_SSH_PUBLIC_KEY }}" \
             -var="cluster_admin_role_arn=${{ vars.CLUSTER_ADMIN_ROLE_ARN }}" \
             -var="mongo_app_password=${{ secrets.MONGO_APP_PASSWORD }}"
@@ -174,8 +183,11 @@ jobs:
       - name: Destroy
         working-directory: ${{ env.TF_DIR }}
         run: |
-          terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ vars.AWS_REGION }}"
           terraform destroy -auto-approve -input=false \
+            -var="aws_region=${{ vars.AWS_REGION }}" \
             -var="ssh_public_key=${{ vars.MONGO_SSH_PUBLIC_KEY }}" \
             -var="cluster_admin_role_arn=${{ vars.CLUSTER_ADMIN_ROLE_ARN }}" \
             -var="mongo_app_password=${{ secrets.MONGO_APP_PASSWORD }}"

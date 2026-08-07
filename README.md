@@ -7,7 +7,7 @@ are configured to detect.
 
 | | |
 |---|---|
-| Cloud provider | AWS, region `us-east-2` |
+| Cloud provider | AWS, region set via the `AWS_REGION` GitHub variable (defaults to `us-east-2` locally) |
 | Cluster | `sachin-app-cluster` (EKS, private subnets) |
 | IaC | Terraform (no CloudFormation) |
 | CI/CD | GitHub Actions × 2 pipelines |
@@ -250,14 +250,17 @@ by name (`aws iam get-role --role-name sachin-app-alb-controller`), applies
 ```bash
 cd infra/bootstrap
 terraform init
-terraform apply -var="github_repository=<owner>/<repo>"
+terraform apply -var="github_repository=<owner>/<repo>" -var="aws_region=<your aws region>"
 terraform output           # note both values
 ```
+
+`-var="aws_region=..."` only needs to be passed if you're not using the default (`us-east-2`) — see `infra/bootstrap/variables.tf`. Whatever region you land on here is the same one you'll set as `AWS_REGION` below; it's the only place the region needs to be chosen, everything else reads it from that one GitHub variable.
 
 Then set these in **GitHub → Settings → Secrets and variables → Actions**:
 
 | Type | Name | Value |
 |---|---|---|
+| Variable | `AWS_REGION` | the region you deployed the state bucket into above, e.g. `us-east-2` |
 | Variable | `AWS_DEPLOY_ROLE_ARN` | `github_deploy_role_arn` output |
 | Variable | `TF_STATE_BUCKET` | `state_bucket_name` output |
 | Variable | `MONGO_SSH_PUBLIC_KEY` | contents of your `~/.ssh/id_ed25519.pub` |
@@ -295,7 +298,7 @@ then Actions → *Infrastructure (Terraform)* → Run workflow → `destroy`.
 
 ```bash
 # Kubernetes CLI
-aws eks update-kubeconfig --name sachin-app-cluster --region us-east-2
+aws eks update-kubeconfig --name sachin-app-cluster --region <your AWS_REGION>
 kubectl get nodes -o wide                        # all node IPs are 10.20.1x.x = private
 kubectl get pods,svc -n secure-todo
 
@@ -314,7 +317,7 @@ mongosh "mongodb://todo_app:<pw>@127.0.0.1:27017/todo?authSource=todo" \
   --eval 'db.todos.find().pretty()'
 
 # Misconfiguration proof
-curl "https://<backup_bucket>.s3.us-east-2.amazonaws.com/"    # anonymous listing
+curl "https://<backup_bucket>.s3.<your AWS_REGION>.amazonaws.com/"    # anonymous listing
 kubectl auth can-i '*' '*' --as=system:serviceaccount:secure-todo:secure-todo
 
 # Preventative control proof
@@ -335,7 +338,7 @@ kubectl -n secure-todo run bad --image=busybox --privileged    # rejected by PSA
 | 3 | **EKS API endpoint is public (`0.0.0.0/0`)** | GitHub-hosted runners have dynamic egress IPs | Authentication is still SigV4 + EKS Access Entries, so there is no anonymous access — but the endpoint is internet-reachable. Fix by moving CI to a self-hosted runner inside the VPC, then restricting `public_access_cidrs`. Flagged in `eks.tf` as an accepted lab tradeoff, **not** one of the exercise's required weaknesses. |
 | 4 | **CI role holds `AdministratorAccess`** | The pipeline creates VPCs, EKS, IAM, GuardDuty, Config and Security Hub | Scope down to least privilege once the resource set stops changing. See `infra/bootstrap/main.tf`. |
 | 5 | **Branch protection rules** | Cannot be expressed inside the repository | Configure in the GitHub UI: require a PR, require the `Scan IaC` and `Build, scan and deploy` checks, require Code Owner review, require signed commits. |
-| 6 | **Confirm the EKS version** | `kubernetes_version` defaults to `1.33` | Verify it is still supported before the first apply: `aws eks describe-cluster-versions --region us-east-2` |
+| 6 | **Confirm the EKS version** | `kubernetes_version` defaults to `1.33` | Verify it is still supported before the first apply: `aws eks describe-cluster-versions --region <your AWS_REGION>` |
 | 7 | **Amazon Inspector** | Not enabled by Terraform | Misconfigurations 1 and 4 (outdated OS and MongoDB) are only surfaced once Inspector EC2 scanning is switched on. Enable it in the console, or add `aws_inspector2_enabler`, before the demo. |
 | 8 | **NetworkPolicy doesn't cover the Kubernetes API server path** | `k8s/network-policy.yaml`'s egress rules are MongoDB + DNS only | The misconfiguration 6 demo (`wget https://kubernetes.default.svc/...` from inside the app pod) needs that policy temporarily removed first — see COMMANDS.md §7. Whether an `ipBlock` rule could cover it too depends on exactly where the VPC CNI's eBPF agent evaluates egress relative to kube-proxy's DNAT; not asserted here without testing against the live cluster. |
 | 9 | **ALB controller's IAM policy needs re-syncing on upgrade** | `infra/terraform/files/alb-controller-iam-policy.json` is copied from a specific upstream release (v2.13.0) | If `render-alb-controller.ps1`'s chart `--version` is ever bumped, re-copy `docs/install/iam_policy.json` from the matching tag in `kubernetes-sigs/aws-load-balancer-controller` too — the policy and controller version can drift out of sync otherwise. |

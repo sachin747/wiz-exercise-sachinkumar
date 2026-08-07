@@ -43,7 +43,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  AWS_REGION: us-east-2
+  # Same GitHub variable infra.yml reads - one place to change region for
+  # both pipelines.
+  AWS_REGION: ${{ vars.AWS_REGION }}
   PROJECT_NAME: sachin-app
   CLUSTER_NAME: sachin-app-cluster
   NAMESPACE: secure-todo

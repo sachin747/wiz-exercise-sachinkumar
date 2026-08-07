@@ -17,12 +17,14 @@ terraform {
     }
   }
 
-  # Bucket name comes from `terraform output state_bucket_name` in infra/bootstrap.
-  # It is passed at init time so this file needs no edits:
-  #   terraform init -backend-config="bucket=<state_bucket_name>"
+  # Bucket name and region both come in at init time, not written here, so
+  # this file never needs an edit for a different account or region:
+  #   terraform init -backend-config="bucket=<state_bucket_name>" -backend-config="region=<aws_region>"
+  # Backend blocks can't reference variables (Terraform has to know where
+  # state lives before it evaluates anything else), so this is the only
+  # correct way to keep the region out of this file.
   backend "s3" {
     key          = "sachin-app/terraform.tfstate"
-    region       = "us-east-2"
     encrypt      = true
     use_lockfile = true
   }

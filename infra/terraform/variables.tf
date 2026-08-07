@@ -1,7 +1,11 @@
 variable "aws_region" {
   description = "AWS region for the whole environment."
   type        = string
-  default     = "us-east-2"
+  # Only a convenience default for local runs. CI always passes this
+  # explicitly from the AWS_REGION GitHub variable (see .github/workflows/),
+  # so changing region for a real deployment means changing that one GitHub
+  # variable, not this file.
+  default = "us-east-2"
 }
 
 variable "project_name" {
@@ -19,7 +23,7 @@ variable "cluster_name" {
 variable "kubernetes_version" {
   description = <<-EOT
     EKS control plane version. Confirm the value is still supported before
-    applying:  aws eks describe-cluster-versions --region us-east-2
+    applying:  aws eks describe-cluster-versions --region <your aws_region>
   EOT
   type        = string
   default     = "1.33"

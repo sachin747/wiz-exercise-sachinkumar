@@ -6,7 +6,7 @@ Copy-paste order top to bottom.
 ```
 Project      sachin-app
 Cluster      sachin-app-cluster
-Region       us-east-2
+Region       set by the AWS_REGION GitHub variable (us-east-2 default for local runs)
 Namespace    secure-todo
 ```
 
@@ -39,7 +39,7 @@ this just confirms the region and identity match what the Terraform expects.
 ```powershell
 aws --version
 aws sts get-caller-identity                 # confirms your credentials work
-aws configure get region                    # note it — pass -region us-east-2 explicitly if different
+aws configure get region                    # note it — pass -region <your region> explicitly if different
 
 docker --version
 git --version
@@ -506,7 +506,7 @@ The job summary prints the load balancer hostname and the contents of
 
 ```powershell
 # --- connect kubectl to the cluster -------------------------------------
-aws eks update-kubeconfig --name sachin-app-cluster --region us-east-2
+aws eks update-kubeconfig --name sachin-app-cluster --region <your AWS_REGION>
 kubectl get nodes                       # confirms you have API access
 
 # --- discover the infrastructure Terraform built ------------------------
@@ -518,7 +518,7 @@ $MONGO_IP = aws ec2 describe-instances `
 $TAG = "manual-" + (Get-Date -Format "yyyyMMddHHmmss")   # ECR tags are immutable
 
 # --- build, scan, push ---------------------------------------------------
-aws ecr get-login-password --region us-east-2 | `
+aws ecr get-login-password --region <your AWS_REGION> | `
   docker login --username AWS --password-stdin $ECR.Split('/')[0]
 
 docker build -t "${ECR}:${TAG}" .
@@ -667,7 +667,7 @@ kubectl apply -f k8s\network-policy.yaml
 
 # --- DELIBERATE MISCONFIGURATION: public S3 backups ----------------------
 $BUCKET = aws s3api list-buckets --query "Buckets[?starts_with(Name,'sachin-app-mongo-backups')].Name" --output text
-curl "https://$BUCKET.s3.us-east-2.amazonaws.com/"          # anonymous listing works
+curl "https://$BUCKET.s3.<your AWS_REGION>.amazonaws.com/"          # anonymous listing works
 aws s3 ls "s3://$BUCKET/daily/" --no-sign-request           # ...and so does this
 
 # --- DELIBERATE MISCONFIGURATION: SSH open to the world ------------------
@@ -872,7 +872,7 @@ cd ..\..
 |---|---|
 | `docker compose up` fails on MongoDB startup | An old `mongo:8.0` volume. Run `docker compose down -v`. |
 | `terraform apply` fails on GuardDuty / Config / Security Hub | Already enabled in the account+region — they are singletons. Set `enable_guardduty=false`, `enable_aws_config=false` or `enable_security_hub=false`. |
-| `terraform apply` fails on the EKS version | `kubernetes_version` no longer supported. Check `aws eks describe-cluster-versions --region us-east-2` and update the variable. |
+| `terraform apply` fails on the EKS version | `kubernetes_version` no longer supported. Check `aws eks describe-cluster-versions --region <your AWS_REGION>` and update the variable. |
 | Ingress `ADDRESS` stays empty after 5 min | Check the controller pod first: `kubectl logs -n kube-system deploy/aws-load-balancer-controller --tail=50`. Common causes: the ServiceAccount's `eks.amazonaws.com/role-arn` annotation never got patched in (check `kubectl get sa aws-load-balancer-controller -n kube-system -o yaml`), or public subnets missing the `kubernetes.io/role/elb=1` tag (they shouldn't be, `network.tf` sets it). |
 | Controller pod stuck `CrashLoopBackOff` or logs show `AccessDenied` | IRSA isn't wired up right — confirm the ServiceAccount annotation has a real role ARN, not `REPLACED_BY_PIPELINE`, and that `infra/terraform/alb-controller.tf`'s IAM policy actually applied (`aws iam get-role-policy` / `list-attached-role-policies` on `sachin-app-alb-controller`). |
 | App unreachable even though the ALB has a hostname | Target type is `ip` (`k8s/ingress.yaml`), so the controller manages its own backend security group rules via IAM — check `kubectl describe targetgroupbindings.elbv2.k8s.aws -n secure-todo` for unhealthy targets before assuming it's a networking gap to fix by hand. |
