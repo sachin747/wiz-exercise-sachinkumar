@@ -36,10 +36,6 @@ on:
 permissions:
   contents: read
   id-token: write
-  security-events: write
-  # Required only because this repo is private - upload-sarif needs it to
-  # look up the current run when associating SARIF results with it.
-  actions: read
 
 concurrency:
   group: application
@@ -126,28 +122,15 @@ jobs:
           exit-code: "1"
 
       # Reports only, doesn't block - the cluster-admin binding is required
-      # by the exercise, so this can't fail the build. Findings still show
-      # up in the Security tab.
+      # by the exercise, so this can't fail the build. Printed straight to
+      # the job log; no Security-tab upload since this account's plan
+      # doesn't include Advanced Security on a private repo.
       - name: Trivy Kubernetes config scan (reporting)
         uses: aquasecurity/trivy-action@v0.33.1
         with:
           scan-type: config
           scan-ref: k8s/
-          format: sarif
-          output: trivy-k8s.sarif
           exit-code: "0"
-
-      # Same as infra.yml: private repo, no Advanced Security on this plan,
-      # so code scanning uploads aren't available yet. Trivy's findings
-      # still print in full in the step above; this just can't reach the
-      # Security tab. Drop continue-on-error once the repo goes public.
-      - name: Upload Kubernetes scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        continue-on-error: true
-        with:
-          sarif_file: trivy-k8s.sarif
-          category: trivy-k8s
 
       # Everything from here down is skipped on pull requests.
 
