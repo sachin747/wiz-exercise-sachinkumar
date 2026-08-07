@@ -106,7 +106,18 @@ jobs:
             --repository-names "$PROJECT_NAME-alb-controller" \
             --query 'repositories[0].repositoryUri' --output text)
 
-          for name in ECR_URL MONGO_IP ALB_ROLE_ARN ALB_CONTROLLER_ECR_URL; do
+          # The controller normally falls back to EC2 instance metadata
+          # (IMDS) to discover its own VPC ID. eks.tf deliberately caps
+          # http_put_response_hop_limit at 1 (a compromised pod can't reach
+          # the node's instance credentials via IMDS) - a real security
+          # control we're not loosening for this. So the VPC ID is passed
+          # in explicitly instead (see the Deploy step below), same as AWS's
+          # own docs recommend for IMDS-restricted environments.
+          VPC_ID=$(aws ec2 describe-vpcs \
+            --filters "Name=tag:Name,Values=$PROJECT_NAME-vpc" \
+            --query 'Vpcs[0].VpcId' --output text)
+
+          for name in ECR_URL MONGO_IP ALB_ROLE_ARN ALB_CONTROLLER_ECR_URL VPC_ID; do
             if [ -z "${!name}" ] || [ "${!name}" = "None" ]; then
               echo "::error::$name resolved empty - infra.yml probably hasn't applied yet" >&2
               exit 1
@@ -118,6 +129,7 @@ jobs:
             echo "mongo_ip=$MONGO_IP"
             echo "alb_role_arn=$ALB_ROLE_ARN"
             echo "alb_controller_ecr_url=$ALB_CONTROLLER_ECR_URL"
+            echo "vpc_id=$VPC_ID"
             echo "image_tag=${GITHUB_SHA::12}"
           } >>"$GITHUB_OUTPUT"
 
@@ -207,6 +219,7 @@ jobs:
           IMAGE: ${{ steps.infra.outputs.ecr_url }}:${{ steps.infra.outputs.image_tag }}
           ALB_ROLE_ARN: ${{ steps.infra.outputs.alb_role_arn }}
           ALB_CONTROLLER_ECR_URL: ${{ steps.infra.outputs.alb_controller_ecr_url }}
+          VPC_ID: ${{ steps.infra.outputs.vpc_id }}
         run: |
           set -euo pipefail
 
@@ -219,8 +232,21 @@ jobs:
           # here for the private mirror infra.yml maintains, so the file
           # itself stays untouched by any one AWS account's ECR URL and
           # this keeps working after a fresh render.
+          #
+          # It also only sets --cluster-name/--ingress-class, so the
+          # controller falls back to IMDS to find its own VPC ID - which
+          # eks.tf deliberately blocks from pods (http_put_response_hop_limit
+          # = 1, a real hardening control, not something to loosen for this).
+          # --aws-vpc-id/--aws-region are appended after --ingress-class so
+          # it never needs IMDS at all. Same reasoning as the image swap
+          # above: injected here rather than hardcoded into the manifest, so
+          # it stays account/region-portable after a fresh render.
           ALB_CONTROLLER_MANIFEST=$(sed \
-            "s|public\.ecr\.aws/eks/aws-load-balancer-controller:|${ALB_CONTROLLER_ECR_URL}:|" \
+            -e "s|public\.ecr\.aws/eks/aws-load-balancer-controller:|${ALB_CONTROLLER_ECR_URL}:|" \
+            -e "/- --ingress-class=alb/a\\
+        - --aws-vpc-id=${VPC_ID}" \
+            -e "/- --ingress-class=alb/a\\
+        - --aws-region=${AWS_REGION}" \
             k8s/alb-controller.yaml)
 
           # This manifest applies CRDs (ingressclassparams.elbv2.k8s.aws etc.)
