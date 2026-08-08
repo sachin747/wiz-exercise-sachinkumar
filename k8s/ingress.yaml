@@ -17,6 +17,19 @@ metadata:
     alb.ingress.kubernetes.io/healthcheck-interval-seconds: "10"
     alb.ingress.kubernetes.io/healthy-threshold-count: "2"
     alb.ingress.kubernetes.io/unhealthy-threshold-count: "2"
+    # 2 replicas, in-memory HttpSession, no shared session store (see
+    # application.yml - server.servlet.session). Without this, the ALB
+    # round-robins each request to either pod independently, so the CSRF
+    # token/session a login's GET mints on one pod often doesn't exist on
+    # whichever pod its POST lands on next - login fails every time.
+    # Duration matches server.servlet.session.timeout (30m) so stickiness
+    # doesn't expire out from under an active session. This masks the
+    # symptom rather than fixing statelessness - accepted trade-off here
+    # since the alternative (spring-session-data-mongodb) would make login
+    # depend on the Mongo VM, which has no HA and is an intentionally
+    # fragile part of this exercise. Real fix for production: externalize
+    # sessions instead of pinning traffic.
+    alb.ingress.kubernetes.io/target-group-attributes: stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=1800
 spec:
   ingressClassName: alb
   rules:
