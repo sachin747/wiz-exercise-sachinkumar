@@ -167,10 +167,19 @@ resource "aws_eks_node_group" "app" {
 
   # Nodes need a working egress path (NAT gateway, network.tf) before they
   # can reach ECR/EKS/EC2 APIs to pull kube-proxy/vpc-cni/coredns and become
-  # Ready, so the NAT + its route have to exist first.
+  # Ready, so the NAT + its route have to exist first. Depending on just the
+  # NAT gateway resource is NOT enough - it says nothing about whether the
+  # private route table's default route is actually wired up and associated
+  # with the subnet nodes launch into. aws_route_table_association has no
+  # implicit link back to aws_subnet in Terraform's graph, so without this
+  # explicit dependency nodes can launch in parallel with (or before) their
+  # subnet's route table association finishes, boot with no default route
+  # yet, and never recover (NetworkPluginNotReady: cni plugin not
+  # initialized - seen for real on the first apply of this design).
   depends_on = [
     aws_iam_role_policy_attachment.eks_node,
     aws_nat_gateway.main,
+    aws_route_table_association.private,
     aws_vpc_endpoint.s3,
   ]
 }
