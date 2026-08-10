@@ -5,7 +5,7 @@ variable "aws_region" {
   # explicitly from the AWS_REGION GitHub variable (see .github/workflows/),
   # so changing region for a real deployment means changing that one GitHub
   # variable, not this file.
-  default = "us-east-2"
+  default = "us-east-1"
 }
 
 variable "project_name" {
@@ -77,18 +77,6 @@ variable "cluster_admin_role_arn" {
   EOT
   type        = string
   default     = ""
-}
-
-variable "enable_guardduty" {
-  description = "Set false if GuardDuty is already enabled in this account/region."
-  type        = bool
-  default     = true
-}
-
-variable "enable_aws_config" {
-  description = "Set false if an AWS Config recorder already exists in this account/region."
-  type        = bool
-  default     = true
 }
 
 variable "enable_security_hub" {

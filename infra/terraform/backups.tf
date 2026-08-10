@@ -1,8 +1,7 @@
 # MongoDB backup bucket. The PDF requires it to be public read + public
 # list, so this whole file is basically that one weakness: anyone can list
-# s3://<bucket>/daily/ and pull down a full mongodump. Config rules
-# s3-bucket-public-read-prohibited / s3-bucket-level-public-access-prohibited
-# and Security Hub S3.2/S3.8 all catch it; Macie would too if it's enabled.
+# s3://<bucket>/daily/ and pull down a full mongodump. Security Hub S3.2/S3.8
+# catch it; Macie would too if it's enabled.
 
 resource "aws_s3_bucket" "backups" {
   bucket        = "${var.project_name}-mongo-backups-${data.aws_caller_identity.current.account_id}"

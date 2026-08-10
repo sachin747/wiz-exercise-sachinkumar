@@ -32,8 +32,7 @@ resource "aws_subnet" "public" {
 }
 
 # Worker nodes only ever land here - satisfies "cluster must be deployed in
-# a private subnet". No NAT gateway, no default route out; vpc-endpoints.tf
-# covers what replaces it.
+# a private subnet". Egress goes through the NAT gateway below.
 resource "aws_subnet" "private" {
   count             = 2
   vpc_id            = aws_vpc.main.id
@@ -58,14 +57,34 @@ resource "aws_route_table" "public" {
   tags = { Name = "${var.project_name}-public" }
 }
 
-# No NAT gateway, deliberately: this replaces ~$33/month of always-on NAT
-# with VPC endpoints that cost less AND leave private subnets with zero
-# internet egress path at all -- see vpc-endpoints.tf. This route table
-# carries no default route; it gets the S3 gateway endpoint's route added
-# automatically (via that resource's route_table_ids), plus the implicit
-# local VPC route Terraform/AWS always provides.
+# Single NAT gateway in one AZ (public-0), not one per AZ: this is a cost
+# lab, not a production HA setup, and it deliberately lines up with the EKS
+# node group and Mongo VM both living in that same AZ (see eks.tf) - avoids
+# needless cross-AZ data-processing charges. Replaces what used to be six
+# VPC interface endpoints (~$0.12/hr) with one NAT gateway (~$0.045/hr) -
+# simpler and cheaper, not just a security trade-off. The S3 gateway
+# endpoint (vpc-endpoints.tf) stays regardless: it's free and keeps ECR's
+# S3-backed image layer pulls off the NAT entirely.
+resource "aws_eip" "nat" {
+  domain = "vpc"
+  tags   = { Name = "${var.project_name}-nat" }
+}
+
+resource "aws_nat_gateway" "main" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public[0].id
+  tags          = { Name = "${var.project_name}-nat" }
+
+  depends_on = [aws_internet_gateway.main]
+}
+
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.main.id
+  }
 
   tags = { Name = "${var.project_name}-private" }
 }

@@ -6,7 +6,7 @@ variable "aws_region" {
   # this default; whatever you pick here should match the AWS_REGION
   # GitHub variable used by infra.yml/app.yml, since that's the same
   # region infra/terraform will deploy into.
-  default = "us-east-2"
+  default = "us-east-1"
 }
 
 variable "project_name" {
@@ -18,6 +18,7 @@ variable "project_name" {
 variable "github_repository" {
   description = "GitHub repository allowed to assume the deploy role, as owner/repo."
   type        = string
+  default     = "sachin747/wiz-exercise-sachinkumar"
 }
 
 variable "create_oidc_provider" {

@@ -23,9 +23,7 @@ resource "aws_security_group" "mongo" {
   tags = { Name = "${var.project_name}-mongo" }
 }
 
-# SSH wide open - second required weakness. Config rule restricted-ssh and
-# Security Hub EC2.13 both catch it; GuardDuty adds brute-force findings once
-# someone starts probing it.
+# SSH wide open - second required weakness. Security Hub EC2.13 catches it.
 resource "aws_vpc_security_group_ingress_rule" "mongo_ssh_public" {
   security_group_id = aws_security_group.mongo.id
   description       = "SSH open to 0.0.0.0/0 - intentional, see mongodb.tf header"

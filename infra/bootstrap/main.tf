@@ -130,8 +130,8 @@ resource "aws_iam_role" "github_deploy" {
   assume_role_policy = data.aws_iam_policy_document.github_assume_role.json
 }
 
-# Lab scope: the pipeline creates VPCs, EKS clusters, IAM roles, GuardDuty,
-# Config and Security Hub. Narrowing this to least privilege is tracked as an
+# Lab scope: the pipeline creates VPCs, EKS clusters, IAM roles and Security
+# Hub. Narrowing this to least privilege is tracked as an
 # open TODO in the README.
 resource "aws_iam_role_policy_attachment" "github_deploy_admin" {
   role       = aws_iam_role.github_deploy.name

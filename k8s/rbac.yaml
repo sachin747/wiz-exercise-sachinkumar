@@ -11,8 +11,10 @@ automountServiceAccountToken: true
 # assigned a cluster-wide kubernetes admin role and privilege". Combined with
 # the mounted token above, RCE inside the todo container = the whole cluster.
 #
-# GuardDuty's EKS Audit Log Monitoring picks this up
-# (Policy:Kubernetes/AdminAccessToDefaultServiceAccount,
+# Trivy's Kubernetes scan (app.yml) flags this cluster-admin binding
+# directly; demo it live with `kubectl auth can-i '*' '*' --as=...` from
+# COMMANDS.md. (GuardDuty's EKS Audit Log Monitoring used to be listed here
+# too, but it was dropped in favor of Security Hub alone - see security.tf.)
 # PrivilegeEscalation:Kubernetes/PrivilegedContainer). Trivy's Kubernetes
 # config scan in the app pipeline also reports it - not blocking, since the
 # exercise requires this to actually be there.

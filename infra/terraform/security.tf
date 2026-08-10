@@ -1,10 +1,17 @@
 # Cloud-native security tooling - the third pillar of the exercise.
 # Quick map of what's where: CloudTrail + EKS control plane logs handle
-# audit. EBS encryption by default, S3 TLS-only, ECR scan-on-push, IMDSv2,
-# and Pod Security Admission (see k8s/namespace.yaml) are the preventative
-# side. GuardDuty, Config and Security Hub are detective. Every rule below
-# exists because it fires on something this repo deliberately breaks - see
-# the README table for the full mapping.
+# audit (required). EBS encryption by default, S3 TLS-only, ECR scan-on-push,
+# IMDSv2, and Pod Security Admission (see k8s/namespace.yaml) are the
+# preventative side (the exercise requires at least one - this repo has
+# several). Security Hub is the detective control (the exercise requires at
+# least one). GuardDuty and AWS Config were dropped deliberately: the
+# exercise only asks for one detective control, and running three
+# overlapping tools added cost and complexity without covering anything
+# Security Hub's foundational + CIS standards don't already catch. Security
+# Hub was kept over the other two because its checks evaluate continuously
+# against existing resource config, so findings are visible immediately
+# rather than needing triggered activity (GuardDuty) or a recorder pipeline
+# to spin up first (Config) - more reliable for a scheduled demo.
 
 # --- audit: control plane logging ---
 
@@ -99,187 +106,12 @@ resource "aws_ebs_encryption_by_default" "main" {
   enabled = true
 }
 
-# --- detective: GuardDuty ---
-
-resource "aws_guardduty_detector" "main" {
-  count                        = var.enable_guardduty ? 1 : 0
-  enable                       = true
-  finding_publishing_frequency = "FIFTEEN_MINUTES"
-}
-
-# Reads the EKS audit log stream turned on in eks.tf - this is what surfaces
-# the cluster-admin service account getting used.
-resource "aws_guardduty_detector_feature" "eks_audit_logs" {
-  count       = var.enable_guardduty ? 1 : 0
-  detector_id = aws_guardduty_detector.main[0].id
-  name        = "EKS_AUDIT_LOGS"
-  status      = "ENABLED"
-}
-
-resource "aws_guardduty_detector_feature" "s3_data_events" {
-  count       = var.enable_guardduty ? 1 : 0
-  detector_id = aws_guardduty_detector.main[0].id
-  name        = "S3_DATA_EVENTS"
-  status      = "ENABLED"
-}
-
-# --- detective: AWS Config ---
-
-resource "aws_s3_bucket" "config" {
-  count         = var.enable_aws_config ? 1 : 0
-  bucket        = "${var.project_name}-config-${data.aws_caller_identity.current.account_id}"
-  force_destroy = true
-}
-
-resource "aws_s3_bucket_public_access_block" "config" {
-  count                   = var.enable_aws_config ? 1 : 0
-  bucket                  = aws_s3_bucket.config[0].id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-data "aws_iam_policy_document" "config_assume" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["config.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role" "config" {
-  count              = var.enable_aws_config ? 1 : 0
-  name               = "${var.project_name}-config"
-  assume_role_policy = data.aws_iam_policy_document.config_assume.json
-}
-
-resource "aws_iam_role_policy_attachment" "config" {
-  count      = var.enable_aws_config ? 1 : 0
-  role       = aws_iam_role.config[0].name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWS_ConfigRole"
-}
-
-resource "aws_iam_role_policy" "config_delivery" {
-  count = var.enable_aws_config ? 1 : 0
-  name  = "config-delivery"
-  role  = aws_iam_role.config[0].id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = ["s3:PutObject"]
-        Resource = ["${aws_s3_bucket.config[0].arn}/*"]
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["s3:GetBucketAcl", "s3:ListBucket"]
-        Resource = [aws_s3_bucket.config[0].arn]
-      },
-    ]
-  })
-}
-
-data "aws_iam_policy_document" "config_bucket" {
-  count = var.enable_aws_config ? 1 : 0
-
-  statement {
-    sid       = "AwsConfigBucketPermissionsCheck"
-    effect    = "Allow"
-    actions   = ["s3:GetBucketAcl", "s3:ListBucket"]
-    resources = [aws_s3_bucket.config[0].arn]
-    principals {
-      type        = "Service"
-      identifiers = ["config.amazonaws.com"]
-    }
-  }
-
-  statement {
-    sid       = "AwsConfigBucketDelivery"
-    effect    = "Allow"
-    actions   = ["s3:PutObject"]
-    resources = ["${aws_s3_bucket.config[0].arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/Config/*"]
-    principals {
-      type        = "Service"
-      identifiers = ["config.amazonaws.com"]
-    }
-    condition {
-      test     = "StringEquals"
-      variable = "s3:x-amz-acl"
-      values   = ["bucket-owner-full-control"]
-    }
-  }
-}
-
-resource "aws_s3_bucket_policy" "config" {
-  count  = var.enable_aws_config ? 1 : 0
-  bucket = aws_s3_bucket.config[0].id
-  policy = data.aws_iam_policy_document.config_bucket[0].json
-}
-
-resource "aws_config_configuration_recorder" "main" {
-  count    = var.enable_aws_config ? 1 : 0
-  name     = "${var.project_name}-recorder"
-  role_arn = aws_iam_role.config[0].arn
-
-  recording_group {
-    all_supported                 = true
-    include_global_resource_types = true
-  }
-}
-
-resource "aws_config_delivery_channel" "main" {
-  count          = var.enable_aws_config ? 1 : 0
-  name           = "${var.project_name}-delivery"
-  s3_bucket_name = aws_s3_bucket.config[0].id
-
-  depends_on = [
-    aws_config_configuration_recorder.main,
-    aws_s3_bucket_policy.config,
-  ]
-}
-
-resource "aws_config_configuration_recorder_status" "main" {
-  count      = var.enable_aws_config ? 1 : 0
-  name       = aws_config_configuration_recorder.main[0].name
-  is_enabled = true
-  depends_on = [aws_config_delivery_channel.main]
-}
-
-# One rule per weakness this repo deliberately ships.
-locals {
-  config_rules = var.enable_aws_config ? {
-    # mongo SSH open to the world
-    "restricted-ssh" = "INCOMING_SSH_DISABLED"
-    # backups bucket
-    "s3-public-read-prohibited" = "S3_BUCKET_PUBLIC_READ_PROHIBITED"
-    # backups bucket, belt and suspenders
-    "s3-public-access-blocked" = "S3_BUCKET_LEVEL_PUBLIC_ACCESS_PROHIBITED"
-    # mongo's ec2:* policy
-    "iam-policy-no-full-access" = "IAM_POLICY_NO_STATEMENTS_WITH_FULL_ACCESS"
-    # mongo VM in the public subnet
-    "ec2-no-public-ip" = "EC2_INSTANCE_NO_PUBLIC_IP"
-  } : {}
-}
-
-resource "aws_config_config_rule" "managed" {
-  for_each = local.config_rules
-
-  name = "${var.project_name}-${each.key}"
-
-  source {
-    owner             = "AWS"
-    source_identifier = each.value
-  }
-
-  depends_on = [aws_config_configuration_recorder_status.main]
-}
-
-# --- detective: Security Hub, rolls the above up into one findings view ---
+# --- detective: Security Hub ---
+# Foundational Security Best Practices + CIS standards cover every
+# intentional weakness in this repo (public SSH, public bucket,
+# overprivileged IAM, public EC2 IP, unencrypted transport, etc.) without
+# needing custom rules the way Config did, or waiting on triggered activity
+# the way GuardDuty did.
 
 resource "aws_securityhub_account" "main" {
   count = var.enable_security_hub ? 1 : 0

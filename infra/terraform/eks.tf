@@ -58,7 +58,8 @@ resource "aws_eks_cluster" "main" {
   role_arn = aws_iam_role.eks_cluster.arn
 
   # Covers the "configure control plane audit logging" requirement - all five
-  # streams go to CloudWatch and feed GuardDuty's EKS Audit Log Monitoring.
+  # streams go to CloudWatch Logs (90-day retention, security.tf's comment
+  # has the full picture).
   enabled_cluster_log_types = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
 
   # False because the three core add-ons (coredns, kube-proxy, vpc-cni) are
@@ -143,9 +144,15 @@ resource "aws_eks_node_group" "app" {
   cluster_name    = aws_eks_cluster.main.name
   node_group_name = "application"
   node_role_arn   = aws_iam_role.eks_node.arn
-  subnet_ids      = aws_subnet.private[*].id
-  instance_types  = [var.node_instance_type]
-  ami_type        = "AL2023_x86_64_STANDARD"
+  # Single AZ (private-0) for the actual compute, not both private subnets:
+  # nodes are billed per-instance regardless of AZ count, so spreading them
+  # across AZs bought no cost benefit, only lost the cross-AZ resilience
+  # this lab doesn't need. The cluster's own vpc_config above still
+  # registers both private subnets - EKS requires >= 2 AZs for the control
+  # plane itself, that part can't shrink.
+  subnet_ids     = [aws_subnet.private[0].id]
+  instance_types = [var.node_instance_type]
+  ami_type       = "AL2023_x86_64_STANDARD"
 
   scaling_config {
     desired_size = var.node_desired_size
@@ -158,13 +165,12 @@ resource "aws_eks_node_group" "app" {
     version = aws_launch_template.node.latest_version
   }
 
-  # There is no NAT gateway (see vpc-endpoints.tf) -- nodes must be able to
-  # resolve and reach ECR through the interface endpoints before they can
-  # pull kube-proxy/vpc-cni/coredns and become Ready, so the endpoints have
-  # to exist first.
+  # Nodes need a working egress path (NAT gateway, network.tf) before they
+  # can reach ECR/EKS/EC2 APIs to pull kube-proxy/vpc-cni/coredns and become
+  # Ready, so the NAT + its route have to exist first.
   depends_on = [
     aws_iam_role_policy_attachment.eks_node,
-    aws_vpc_endpoint.interface,
+    aws_nat_gateway.main,
     aws_vpc_endpoint.s3,
   ]
 }

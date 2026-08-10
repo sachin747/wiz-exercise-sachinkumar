@@ -7,7 +7,7 @@ are configured to detect.
 
 | | |
 |---|---|
-| Cloud provider | AWS, region set via the `AWS_REGION` GitHub variable (defaults to `us-east-2` locally) |
+| Cloud provider | AWS, region set via the `AWS_REGION` GitHub variable (defaults to `us-east-1` locally) |
 | Cluster | `sachin-app-cluster` (EKS, private subnets) |
 | IaC | Terraform (no CloudFormation) |
 | CI/CD | GitHub Actions × 2 pipelines |
@@ -32,13 +32,13 @@ are configured to detect.
           └──────────────┬────────────────┘
                          │
    ┌─────────────────────▼───────────────────────┐    ┌──────────────────────┐
-   │ EKS worker nodes — PRIVATE subnets           │    │ MongoDB on EC2       │
-   │ 10.20.10.0/24, 10.20.11.0/24                 │───▶│ public subnet        │
+   │ EKS worker nodes — PRIVATE subnet, 1 AZ      │    │ MongoDB on EC2       │
+   │ 10.20.10.0/24                                │───▶│ public subnet        │
    │ Pod: secure-todo (Spring Boot, non-root)     │27017                      │
    │ MONGODB_URI injected from a k8s Secret       │    │ SSH 22 open to world │
    │                                               │    └──────────┬───────────┘
-   │ No NAT gateway, no internet egress at all --  │               │ daily cron
-   │ AWS API access only, via VPC endpoints        │               ▼
+   │ Single NAT gateway for egress (ECR/EKS/EC2   │               │ daily cron
+   │ API calls); no inbound path either way        │               ▼
    └───────────────────────────────────────────────┘   ┌──────────────────────┐
                                                         │ S3 backup bucket     │
                                                         │ PUBLIC read + list   │
@@ -52,14 +52,14 @@ are configured to detect.
 ```
 infra/bootstrap/       run once, locally — TF state bucket + GitHub OIDC role
 infra/terraform/       the environment
-  network.tf           VPC, public/private subnets, no NAT
-  vpc-endpoints.tf     ECR interface endpoints, free S3 gateway endpoint
-  eks.tf               cluster, private node group, add-ons (vpc-cni NetworkPolicy enforcement on)
+  network.tf           VPC, public/private subnets, single NAT gateway (1 AZ)
+  vpc-endpoints.tf     free S3 gateway endpoint only
+  eks.tf               cluster (2-AZ control plane), private node group (1 AZ), add-ons (vpc-cni NetworkPolicy enforcement on)
   alb-controller.tf    IRSA (OIDC provider + IAM role) for the AWS Load Balancer Controller
   ecr.tf               image registry (immutable tags, scan on push)
   mongodb.tf           MongoDB VM  ← misconfigurations 1–4
   backups.tf           S3 backup bucket ← misconfiguration 5
-  security.tf          CloudTrail, GuardDuty, AWS Config, Security Hub
+  security.tf          CloudTrail, EBS encryption by default, Security Hub
 k8s/                   flat manifests, applied directly with `kubectl apply -f`
   rbac.yaml            ← misconfiguration 6
   service.yaml          type: ClusterIP — traffic arrives via the Ingress below
@@ -85,12 +85,12 @@ with a `DELIBERATE MISCONFIGURATION` comment naming the detecting service.
 | # | Misconfiguration | Where | Detected by |
 |---|---|---|---|
 | 1 | **Outdated OS** — Amazon Linux 2 (EOL June 2026, >1 yr behind AL2023) | `infra/terraform/mongodb.tf` | Amazon Inspector EC2 scanning → Security Hub |
-| 2 | **SSH open to `0.0.0.0/0`** | `infra/terraform/mongodb.tf` | AWS Config `restricted-ssh`, Security Hub **EC2.13**, GuardDuty brute-force findings |
-| 3 | **Over-privileged VM role** — `ec2:*` on `*`, so the database server can create and destroy instances | `infra/terraform/mongodb.tf` | AWS Config `iam-policy-no-full-access`, Security Hub **IAM.21** |
+| 2 | **SSH open to `0.0.0.0/0`** | `infra/terraform/mongodb.tf` | Security Hub **EC2.13** |
+| 3 | **Over-privileged VM role** — `ec2:*` on `*`, so the database server can create and destroy instances | `infra/terraform/mongodb.tf` | Security Hub **IAM.21** |
 | 4 | **Outdated MongoDB 6.0.14** (released Jan 2024; the 6.0 series is end-of-life) | `infra/terraform/mongodb.tf` | Amazon Inspector software vulnerability findings → Security Hub |
-| 5 | **S3 backup bucket public read + public list** — anyone can `curl` a full `mongodump` | `infra/terraform/backups.tf` | AWS Config `s3-public-read-prohibited` and `s3-public-access-blocked`, Security Hub **S3.2 / S3.8**, GuardDuty S3 Protection |
-| 6 | **Pod bound to `cluster-admin`** with a mounted service-account token | `k8s/rbac.yaml` | GuardDuty EKS Audit Log Monitoring, Trivy Kubernetes scan in the app pipeline |
-| — | MongoDB VM in a public subnet with a public IP | `infra/terraform/mongodb.tf` | AWS Config `ec2-no-public-ip`, Security Hub **EC2.9** |
+| 5 | **S3 backup bucket public read + public list** — anyone can `curl` a full `mongodump` | `infra/terraform/backups.tf` | Security Hub **S3.2 / S3.8** |
+| 6 | **Pod bound to `cluster-admin`** with a mounted service-account token | `k8s/rbac.yaml` | Trivy Kubernetes scan in the app pipeline |
+| — | MongoDB VM in a public subnet with a public IP | `infra/terraform/mongodb.tf` | Security Hub **EC2.9** |
 
 ### Requirements deliberately *not* weakened
 
@@ -115,7 +115,8 @@ The brief also mandates two controls that stay tight, and they are implemented:
   validation, dedicated encrypted bucket with a TLS-only policy.
 - **EKS control plane audit logging** — all five streams (`api`, `audit`,
   `authenticator`, `controllerManager`, `scheduler`) to CloudWatch Logs with
-  90-day retention. This is also what feeds GuardDuty EKS Audit Log Monitoring.
+  90-day retention. This satisfies the exercise's control-plane audit logging
+  requirement directly.
 
 ### Preventative controls
 
@@ -130,50 +131,55 @@ These **block** a bad state rather than reporting it after the fact:
 | S3 TLS-only bucket policy | `security.tf` | Plaintext access to the audit log bucket |
 | NetworkPolicy — app pod egress restricted to MongoDB + DNS | `k8s/network-policy.yaml`, `eks.tf` (`enableNetworkPolicy`) | A compromised pod (misconfiguration 6) reaching anywhere else inside the VPC — other pods, the EKS API, other services. Enforced by the VPC CNI's built-in eBPF agent |
 | GitHub OIDC federation | both pipelines | Long-lived AWS access keys existing in GitHub at all |
-| No NAT gateway — zero internet egress from private subnets | `network.tf`, `vpc-endpoints.tf` | A compromised pod reaching out to a C2 server, exfiltrating data, or pulling anything from outside AWS. There is no route out; there's nothing to disable |
 
-### No NAT gateway
+### NAT gateway, single AZ
 
-The exercise's reference architecture diagram never shows a NAT gateway — it
-only shows a load balancer, the private cluster, the VM and the backup
-bucket. NAT is an implementation detail for private-subnet internet egress,
-not a stated requirement, and at $0.045/hr + $0.045/GB it's a flat ~$33/month
-tax regardless of how little traffic actually needs it (checked against
-current AWS pricing, not assumed).
+Earlier revisions of this repo went NAT-free (VPC interface endpoints only)
+on the theory that it was both cheaper and more secure. Checked against
+current AWS pricing, that wasn't actually true for this shape: six interface
+endpoints across 2 AZs run ~$0.12/hr, more than a single NAT gateway's
+~$0.045/hr — so the endpoints-only design cost more while adding five extra
+resources (a security group plus six endpoints) for the same private-subnet
+egress need. `vpc-endpoints.tf` now keeps only the free S3 gateway endpoint
+(no hourly charge, no data charge — keeps ECR's S3-backed image layer pulls
+off the NAT gateway entirely); everything else routes through one NAT
+gateway in `network.tf`.
 
-What the private subnets are actually used for was checked directly against
-this repo rather than guessed: pulling the app image from our own ECR repo,
-and pulling `vpc-cni`/`coredns`/`kube-proxy` from AWS's own regional ECR (not
-Docker Hub, not the ECR Public Gallery). Nothing else — the EKS API is
-already reachable privately, and the application itself makes no outbound
-calls of its own.
+This does mean private subnets now have an outbound path (through the NAT),
+where the endpoints-only design had none at all — a real, small reduction in
+blast-radius-if-compromised versus the previous design, traded for lower
+cost and less to maintain. There is still no *inbound* path either way.
 
-`vpc-endpoints.tf` covers exactly that: `ecr.api` + `ecr.dkr` as interface
-endpoints, plus the S3 gateway endpoint (free — no hourly charge, no data
-charge, needed because ECR layers are actually served from S3). Two interface
-endpoints across 2 AZs run about $29/month at current pricing — cheaper than
-the single NAT gateway this replaces — while leaving private subnets with
-**no path to the public internet at all**, a stronger security posture than
-NAT ever provided.
+The EKS node group and the NAT gateway both sit in the same single AZ
+(`private-0`/`public-0`) rather than spread across both — nodes are billed
+per-instance regardless of AZ count, so multi-AZ bought no cost benefit here,
+only cross-AZ resilience this lab doesn't need. The cluster's control plane
+still registers both private subnets; EKS requires at least 2 AZs for that
+regardless.
 
 SSM Session Manager into the worker nodes was considered and dropped: the
-exercise requires demonstrating `kubectl`, not node-level shell access, and
-adding the `ssm`/`ssmmessages`/`ec2messages` endpoints for it would have cost
-another ~$44/month for a capability nothing here exercises. `kubectl exec`
-into pods is unaffected either way.
+exercise requires demonstrating `kubectl`, not node-level shell access.
+`kubectl exec` into pods is unaffected either way.
 
 ### Detective controls
 
-- **GuardDuty** — with EKS Audit Log Monitoring and S3 Data Events enabled.
-- **AWS Config** — recorder plus five managed rules, each chosen because it
-  fires on a misconfiguration above (see the table).
 - **Security Hub** — AWS Foundational Security Best Practices + CIS 1.4.0,
-  aggregating Config, GuardDuty and Inspector into one findings view. This is
-  the single screen to demo.
+  covering every misconfiguration in the table above (public SSH, public
+  bucket, over-privileged IAM, public EC2 IP) plus Inspector's EC2/software
+  vulnerability findings. This is the single screen to demo.
 
-> If the account already has GuardDuty, Config or Security Hub enabled, set
-> `enable_guardduty`, `enable_aws_config` or `enable_security_hub` to `false` —
-> these are account-and-region singletons and a second one will fail the apply.
+GuardDuty and AWS Config were evaluated and dropped: the exercise requires
+only one detective control, and running three overlapping tools added cost
+and setup without covering anything Security Hub's standards don't already
+catch. Security Hub was kept over the other two because its checks evaluate
+continuously against existing resource config — findings are visible
+immediately rather than needing triggered activity (GuardDuty) or a recorder
+pipeline to spin up first (Config), which is more reliable for a scheduled
+demo.
+
+> If the account already has Security Hub enabled, set `enable_security_hub`
+> to `false` — it's an account-and-region singleton and a second one will
+> fail the apply.
 
 ---
 
@@ -254,13 +260,13 @@ terraform apply -var="github_repository=<owner>/<repo>" -var="aws_region=<your a
 terraform output           # note both values
 ```
 
-`-var="aws_region=..."` only needs to be passed if you're not using the default (`us-east-2`) — see `infra/bootstrap/variables.tf`. Whatever region you land on here is the same one you'll set as `AWS_REGION` below; it's the only place the region needs to be chosen, everything else reads it from that one GitHub variable.
+`-var="aws_region=..."` only needs to be passed if you're not using the default (`us-east-1`) — see `infra/bootstrap/variables.tf`. Whatever region you land on here is the same one you'll set as `AWS_REGION` below; it's the only place the region needs to be chosen, everything else reads it from that one GitHub variable.
 
 Then set these in **GitHub → Settings → Secrets and variables → Actions**:
 
 | Type | Name | Value |
 |---|---|---|
-| Variable | `AWS_REGION` | the region you deployed the state bucket into above, e.g. `us-east-2` |
+| Variable | `AWS_REGION` | the region you deployed the state bucket into above, e.g. `us-east-1` |
 | Variable | `AWS_DEPLOY_ROLE_ARN` | `github_deploy_role_arn` output |
 | Variable | `TF_STATE_BUCKET` | `state_bucket_name` output |
 | Variable | `MONGO_SSH_PUBLIC_KEY` | contents of your `~/.ssh/id_ed25519.pub` |
@@ -336,7 +342,7 @@ kubectl -n secure-todo run bad --image=busybox --privileged    # rejected by PSA
 | 1 | **Custom domain + ACM certificate** | No domain registered yet | The ALB serves **HTTP on port 80 only**. Once a certificate exists, add to `k8s/ingress.yaml`: a second listener via `alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'` and `alb.ingress.kubernetes.io/certificate-arn: <acm-arn>`. Then set `SESSION_COOKIE_SECURE=true` on the deployment. |
 | 2 | **~~No Kubernetes `Ingress` object~~ — done** | — | Was `Service type: LoadBalancer` only. Now a real `Ingress` (`k8s/ingress.yaml`) served by the AWS Load Balancer Controller — see "Kubernetes tooling stays minimal" above for how the controller manifest was produced without adding Helm as a pipeline dependency. |
 | 3 | **EKS API endpoint is public (`0.0.0.0/0`)** | GitHub-hosted runners have dynamic egress IPs | Authentication is still SigV4 + EKS Access Entries, so there is no anonymous access — but the endpoint is internet-reachable. Fix by moving CI to a self-hosted runner inside the VPC, then restricting `public_access_cidrs`. Flagged in `eks.tf` as an accepted lab tradeoff, **not** one of the exercise's required weaknesses. |
-| 4 | **CI role holds `AdministratorAccess`** | The pipeline creates VPCs, EKS, IAM, GuardDuty, Config and Security Hub | Scope down to least privilege once the resource set stops changing. See `infra/bootstrap/main.tf`. |
+| 4 | **CI role holds `AdministratorAccess`** | The pipeline creates VPCs, EKS, IAM and Security Hub | Scope down to least privilege once the resource set stops changing. See `infra/bootstrap/main.tf`. |
 | 5 | **Branch protection rules** | Cannot be expressed inside the repository | Configure in the GitHub UI: require a PR, require the `Scan IaC` and `Build, scan and deploy` checks, require Code Owner review, require signed commits. |
 | 6 | **Confirm the EKS version** | `kubernetes_version` defaults to `1.33` | Verify it is still supported before the first apply: `aws eks describe-cluster-versions --region <your AWS_REGION>` |
 | 7 | **Amazon Inspector** | Not enabled by Terraform | Misconfigurations 1 and 4 (outdated OS and MongoDB) are only surfaced once Inspector EC2 scanning is switched on. Enable it in the console, or add `aws_inspector2_enabler`, before the demo. |

@@ -13,7 +13,7 @@
 # k8s/alb-controller.yaml.
 
 $ErrorActionPreference = 'Stop'
-Set-Location "C:\repositories\three-tier-secured-app-main"
+Set-Location $PSScriptRoot
 
 Write-Host "=== Rendering AWS Load Balancer Controller v1.13.0 chart via Docker+Helm ==="
 

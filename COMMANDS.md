@@ -6,7 +6,7 @@ Copy-paste order top to bottom.
 ```
 Project      sachin-app
 Cluster      sachin-app-cluster
-Region       set by the AWS_REGION GitHub variable (us-east-2 default for local runs)
+Region       set by the AWS_REGION GitHub variable (us-east-1 default for local runs)
 Namespace    secure-todo
 ```
 
@@ -68,7 +68,7 @@ Runs the real Dockerfile against MongoDB 6.0, the same major version deployed
 on the AWS VM. Nothing here touches AWS.
 
 ```powershell
-cd C:\repositories\three-tier-secured-app-main
+cd C:\wiz-repos\wiz-exercise-sachinkumar
 
 # Old volumes from a newer MongoDB will block startup — always clear first
 docker compose down -v
@@ -164,7 +164,7 @@ This is the path to use: it rebuilds the same artifact the pipeline builds, so
 what you test locally is what deploys to EKS.
 
 ```powershell
-cd C:\repositories\three-tier-secured-app-main
+cd C:\wiz-repos\wiz-exercise-sachinkumar
 
 # 1. Edit your Java / Thymeleaf / CSS files as normal.
 
@@ -222,7 +222,7 @@ Maven on your desktop. Useful for tight edit/run loops; always re-verify with
 §1c before deploying, since this does not exercise the Dockerfile.
 
 ```powershell
-cd C:\repositories\three-tier-secured-app-main
+cd C:\wiz-repos\wiz-exercise-sachinkumar
 
 # 1. Free port 8080 — stop the containerised app but KEEP the database running
 docker compose stop app
@@ -264,7 +264,7 @@ cluster to find out the hard way. `k8s/` is plain manifests now — no
 Kustomize step to render first.
 
 ```powershell
-cd C:\repositories\three-tier-secured-app-main
+cd C:\wiz-repos\wiz-exercise-sachinkumar
 
 # Structural validation against the Kubernetes API schema — no cluster needed
 kubectl apply -f k8s\ --dry-run=client
@@ -290,7 +290,7 @@ their first "configure AWS credentials" step. Not destructive, just re-run
 them from the Actions tab once the variables are set.
 
 ```powershell
-cd C:\repositories\three-tier-secured-app-main
+cd C:\wiz-repos\wiz-exercise-sachinkumar
 
 git init
 git add .
@@ -338,7 +338,7 @@ user from `docker/mongo-init.js`, and a second container can't bind the same
 host port 27017 anyway).
 
 ```powershell
-cd C:\repositories\three-tier-secured-app-main
+cd C:\wiz-repos\wiz-exercise-sachinkumar
 
 # 0. Safety: point kubectl at Docker Desktop, NOT a real EKS cluster. If you
 #    have ever run `aws eks update-kubeconfig`, your current-context could
@@ -352,7 +352,7 @@ docker build -t secure-todo:local .
 
 # 2. MongoDB: reuse the container from §1 (`docker compose up`). If it isn't
 #    already running, start it: docker compose up -d mongodb
-docker ps --filter "name=three-tier-secured-app-main-mongodb-1"
+docker ps --filter "name=wiz-exercise-sachinkumar-mongodb-1"
 
 # 3. Namespace, RBAC (misconfiguration 6), NetworkPolicy (applies cleanly
 #    but isn't enforced here -- Docker Desktop's Kubernetes has no CNI that
@@ -678,27 +678,22 @@ aws ec2 describe-security-groups --filters "Name=group-name,Values=sachin-app-mo
 # Rejected by the API server at admission time, not reported afterwards
 kubectl -n secure-todo run bad --image=busybox --privileged -- sleep 300
 
-# --- PREVENTATIVE CONTROL: no NAT gateway, zero internet egress ----------
-# Times out -- there is no route out of the private subnets at all
+# --- PREVENTATIVE CONTROL: NetworkPolicy egress restriction --------------
+# Times out -- the private subnets do have a route out now (NAT gateway),
+# but the app pod's NetworkPolicy only permits MongoDB + DNS egress,
+# enforced by the VPC CNI's eBPF agent. This is now the only layer
+# stopping it (there used to be a second, redundant layer when private
+# subnets had no route out at all -- see README's "NAT gateway, single AZ").
 kubectl exec -n secure-todo deploy/secure-todo -- wget -T 5 -qO- https://example.com
 
-# ...while AWS API access still works fine, through the VPC endpoints
+# ...while AWS API access still works fine, through the NAT gateway
 kubectl get pods -n secure-todo    # this command itself proves EKS API reachability
-aws ec2 describe-vpc-endpoints --filters "Name=tag:Name,Values=sachin-app-*" `
-  --query 'VpcEndpoints[].[ServiceName,State]' --output table
+aws ec2 describe-nat-gateways --filter "Name=tag:Name,Values=sachin-app-nat" `
+  --query 'NatGateways[].[NatGatewayId,State]' --output table
 
 # --- AUDIT: EKS control plane logging ------------------------------------
 aws logs describe-log-streams --log-group-name /aws/eks/sachin-app-cluster/cluster `
   --order-by LastEventTime --descending --max-items 5
-
-# --- DETECTIVE: AWS Config rules -----------------------------------------
-aws configservice describe-compliance-by-config-rule `
-  --query "ComplianceByConfigRules[?starts_with(ConfigRuleName,'sachin-app')].[ConfigRuleName,Compliance.ComplianceType]" `
-  --output table
-
-# --- DETECTIVE: GuardDuty -------------------------------------------------
-$DET = aws guardduty list-detectors --query 'DetectorIds[0]' --output text
-aws guardduty list-findings --detector-id $DET --max-items 10
 
 # --- DETECTIVE: Security Hub (the one screen to show the panel) ----------
 aws securityhub get-findings `
@@ -716,13 +711,13 @@ service is enabled." Two beats, each a few seconds of real command output.
 
 ```powershell
 # --- ATTACK 1: reach the internet from inside the app pod (prevention) ---
-# Same command as §7's "no NAT gateway" proof, called out here as its own
-# beat: this isn't just a NetworkPolicy rule on paper, it's an actual
-# attacker move (pod compromised -> phone home / pull a second-stage
-# payload) failing for real. Two independent layers stop it -- the private
-# route table has no route to the internet at all (no NAT gateway), and
-# even if it did, the NetworkPolicy only allows MongoDB + DNS -- so this
-# fails whether or not the policy is even applied.
+# Same command as §7's NetworkPolicy proof, called out here as its own
+# beat: this isn't just a rule on paper, it's an actual attacker move (pod
+# compromised -> phone home / pull a second-stage payload) failing for
+# real. The private subnets do have a route out (NAT gateway) now, so this
+# depends entirely on the NetworkPolicy actually being applied and
+# enforced -- confirm that first with the aws-network-policy-agent check in
+# §10's troubleshooting table if this unexpectedly succeeds.
 kubectl exec -n secure-todo deploy/secure-todo -- wget -T 5 -qO- https://example.com
 # Expect: timeout, no response. Contrast with the MongoDB connection, which
 # works fine (same pod, different destination) -- proves it's a deliberate
@@ -871,12 +866,12 @@ cd ..\..
 | Symptom | Cause and fix |
 |---|---|
 | `docker compose up` fails on MongoDB startup | An old `mongo:8.0` volume. Run `docker compose down -v`. |
-| `terraform apply` fails on GuardDuty / Config / Security Hub | Already enabled in the account+region — they are singletons. Set `enable_guardduty=false`, `enable_aws_config=false` or `enable_security_hub=false`. |
+| `terraform apply` fails on Security Hub | Already enabled in the account+region — it's a singleton. Set `enable_security_hub=false`. |
 | `terraform apply` fails on the EKS version | `kubernetes_version` no longer supported. Check `aws eks describe-cluster-versions --region <your AWS_REGION>` and update the variable. |
 | Ingress `ADDRESS` stays empty after 5 min | Check the controller pod first: `kubectl logs -n kube-system deploy/aws-load-balancer-controller --tail=50`. Common causes: the ServiceAccount's `eks.amazonaws.com/role-arn` annotation never got patched in (check `kubectl get sa aws-load-balancer-controller -n kube-system -o yaml`), or public subnets missing the `kubernetes.io/role/elb=1` tag (they shouldn't be, `network.tf` sets it). |
 | Controller pod stuck `CrashLoopBackOff` or logs show `AccessDenied` | IRSA isn't wired up right — confirm the ServiceAccount annotation has a real role ARN, not `REPLACED_BY_PIPELINE`, and that `infra/terraform/alb-controller.tf`'s IAM policy actually applied (`aws iam get-role-policy` / `list-attached-role-policies` on `sachin-app-alb-controller`). |
 | App unreachable even though the ALB has a hostname | Target type is `ip` (`k8s/ingress.yaml`), so the controller manages its own backend security group rules via IAM — check `kubectl describe targetgroupbindings.elbv2.k8s.aws -n secure-todo` for unhealthy targets before assuming it's a networking gap to fix by hand. |
-| Nodes stuck `NotReady`, or pods stuck `ImagePullBackOff` | There is no NAT gateway — image pulls depend entirely on the `ecr.api`/`ecr.dkr` VPC endpoints. Check `aws ec2 describe-vpc-endpoints` shows `available`, and that `aws_vpc_endpoint.interface` finished applying *before* the node group tried to launch (see the `depends_on` in `eks.tf`). |
+| Nodes stuck `NotReady`, or pods stuck `ImagePullBackOff` | Image pulls depend on the single NAT gateway for ECR/EKS/EC2 API reachability. Check `aws ec2 describe-nat-gateways` shows `available`, and that `aws_nat_gateway.main` finished applying *before* the node group tried to launch (see the `depends_on` in `eks.tf`). |
 | Pod stuck `CrashLoopBackOff` | Usually MongoDB unreachable. `kubectl logs -n secure-todo deploy/secure-todo` and confirm the VM is running and the security group allows 27017 from the cluster SG. |
 | App can't reach MongoDB even though the security group + VM look fine | Check `k8s/network-policy.yaml` applied AND that `enableNetworkPolicy` actually took on the vpc-cni addon: `kubectl get daemonset aws-node -n kube-system -o jsonpath='{.spec.template.spec.containers[*].name}'` should list `aws-network-policy-agent`. If it's missing, the addon's `configuration_values` in `eks.tf` didn't apply — re-run `terraform apply`. |
 | `terraform apply` fails with a MongoDB user-creation error mid-boot | `var.mongo_app_password` is empty or wasn't passed. Confirm the `MONGO_APP_PASSWORD` GitHub secret exists in the `aws` environment, or pass `-var="mongo_app_password=..."` manually. |
