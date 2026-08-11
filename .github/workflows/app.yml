@@ -197,9 +197,21 @@ jobs:
         run: |
           set -euo pipefail
           kubectl apply -f k8s/namespace.yaml
+
+          # URL-encode the password before it goes into the connection
+          # string. It's a valid GitHub secret either way, but a bare
+          # mongodb:// URI breaks if the password contains a reserved
+          # character (: @ / ? # etc.) - seen for real: a generated
+          # password containing '@' made the MongoDB driver refuse to even
+          # parse the URI ("connection string contains invalid user
+          # information") before the app got anywhere near a network call.
+          # jq's @uri does RFC 3986 percent-encoding; jq ships on
+          # ubuntu-latest runners already, no extra install needed.
+          MONGO_APP_PASSWORD_ENC=$(jq -rn --arg v "$MONGO_APP_PASSWORD" '$v|@uri')
+
           kubectl create secret generic secure-todo-secrets \
             --namespace "$NAMESPACE" \
-            --from-literal=mongodb-uri="mongodb://todo_app:$MONGO_APP_PASSWORD@${{ steps.infra.outputs.mongo_ip }}:27017/todo?authSource=todo" \
+            --from-literal=mongodb-uri="mongodb://todo_app:$MONGO_APP_PASSWORD_ENC@${{ steps.infra.outputs.mongo_ip }}:27017/todo?authSource=todo" \
             --from-literal=user-name=todo-user \
             --from-literal=user-password="$TODO_USER_PASSWORD" \
             --from-literal=admin-name=todo-admin \
