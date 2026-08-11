@@ -202,7 +202,17 @@ resource "aws_eks_addon" "core" {
   # default vpc-cni addon doesn't out of the box.
   configuration_values = each.value == "vpc-cni" ? jsonencode({ enableNetworkPolicy = "true" }) : null
 
-  depends_on = [aws_eks_node_group.app]
+  # No depends_on on the node group here - that was a deadlock. Nodes can
+  # only reach Ready once the vpc-cni DaemonSet is scheduled and initializes
+  # their network; if the addon waits for the node group to finish creating
+  # first, the node group waits forever on nodes that can never go Ready
+  # (NetworkPluginNotReady: cni plugin not initialized), and EKS eventually
+  # fails it with CREATE_FAILED / "Unhealthy nodes" - seen for real on this
+  # design's first two apply attempts, with kube-system completely empty
+  # (kubectl showed zero pods, not even coredns/kube-proxy, because the
+  # addons never got a chance to install). Addons only need the cluster to
+  # exist (already implicit via cluster_name above), not the node group -
+  # they and the node group should create in parallel.
 }
 
 # --- load balancer exposure ---
