@@ -44,7 +44,15 @@ jobs:
     name: Scan IaC
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 (full history) - the gitleaks step below diffs
+      # <commit>^..<commit> to scan just the PR's changes, which needs the
+      # parent commit to exist locally. Default checkout is a shallow clone
+      # (depth 1, parent not fetched), so that diff fails with "unknown
+      # revision" and the whole job errors out - not a real secret finding,
+      # the scan itself couldn't run. Seen for real on PR #1.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: hashicorp/setup-terraform@v3
         with:
