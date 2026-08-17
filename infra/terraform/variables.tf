@@ -26,7 +26,7 @@ variable "kubernetes_version" {
     applying:  aws eks describe-cluster-versions --region <your aws_region>
   EOT
   type        = string
-  default     = "1.33"
+  default     = "1.34"
 }
 
 variable "node_instance_type" {
